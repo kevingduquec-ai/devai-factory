@@ -19,6 +19,8 @@ import { RequirementsList } from "./requirements-list";
 import { TraceabilityView } from "./traceability-view";
 import { DataModelView, ApiEndpointsView } from "./data-model-view";
 import { ExportPanel } from "./export-panel";
+import { SendToIntegrationPanel } from "./send-to-integration-panel";
+import type { IntegrationConnectionDto } from "@devai-factory/shared-types";
 
 function SectionHeader({ title, subtitle }: { title: string; subtitle: string }) {
   return (
@@ -41,6 +43,13 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
   const project: ProjectDto = await projectRes.json();
   const intake = intakeRes.ok ? await safeJson<IntakeSessionDto>(intakeRes) : null;
   const storiesOnly = project.storiesOnly;
+  const currentUser = session.users.find((u) => u.id === session.currentUserId);
+  const integrationsEnabled = currentUser?.integrationsEnabled ?? false;
+  let integrationConnections: IntegrationConnectionDto[] = [];
+  if (integrationsEnabled && project.status === "generated") {
+    const connectionsRes = await apiFetch("/integrations/connections");
+    if (connectionsRes.ok) integrationConnections = await connectionsRes.json();
+  }
 
   let requirements: RequirementDto[] = [];
   let stories: UserStoryDto[] = [];
@@ -154,6 +163,16 @@ export default async function ProjectDetailPage({ params }: { params: Promise<{ 
             />
             <ExportPanel projectId={project.id} />
           </section>
+
+          {integrationsEnabled && (
+            <section className="space-y-3">
+              <SectionHeader
+                title="Enviar a Jira/ClickUp"
+                subtitle="Crea este contenido directamente como issues o tareas en tu Jira o ClickUp, sin copiar y pegar nada."
+              />
+              <SendToIntegrationPanel projectId={project.id} connections={integrationConnections} />
+            </section>
+          )}
 
           {!storiesOnly && (
             <section className="space-y-3">

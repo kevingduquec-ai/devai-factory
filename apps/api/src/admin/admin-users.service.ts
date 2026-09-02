@@ -14,7 +14,10 @@ export class AdminUsersService {
     }
     return db.user.update({
       where: { id: userId },
-      data: { singleStoryEnabled: dto.singleStoryEnabled },
+      data: {
+        ...(dto.singleStoryEnabled !== undefined ? { singleStoryEnabled: dto.singleStoryEnabled } : {}),
+        ...(dto.integrationsEnabled !== undefined ? { integrationsEnabled: dto.integrationsEnabled } : {}),
+      },
     });
   }
 }

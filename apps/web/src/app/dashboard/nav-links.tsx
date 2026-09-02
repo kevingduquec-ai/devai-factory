@@ -3,14 +3,22 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const LINKS = [
+const BASE_LINKS = [
   { href: "/dashboard", label: "Análisis completo" },
   { href: "/dashboard/quick-stories", label: "Historia de usuario" },
   { href: "/dashboard/billing", label: "Facturación" },
 ];
 
-export function NavLinks() {
+/**
+ * El link de "Integraciones" solo aparece si el super-admin activó el
+ * add-on para esta persona — nunca se muestra una función que no puede
+ * usar (ver módulo Jira/ClickUp, sección "control de activación").
+ */
+export function NavLinks({ integrationsEnabled }: { integrationsEnabled: boolean }) {
   const pathname = usePathname();
+  const LINKS = integrationsEnabled
+    ? [...BASE_LINKS, { href: "/dashboard/integrations", label: "Integraciones" }]
+    : BASE_LINKS;
 
   return (
     <>

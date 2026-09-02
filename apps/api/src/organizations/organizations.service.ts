@@ -37,7 +37,16 @@ export class OrganizationsService {
   async listUsers() {
     return this.tenant.client.user.findMany({
       where: { orgId: this.tenant.currentUser.orgId },
-      select: { id: true, email: true, name: true, role: true, status: true, singleStoryEnabled: true, createdAt: true },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        status: true,
+        singleStoryEnabled: true,
+        integrationsEnabled: true,
+        createdAt: true,
+      },
       orderBy: { createdAt: "asc" },
     });
   }

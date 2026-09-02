@@ -164,3 +164,22 @@ export function SingleStoryEnabledToggle({ userId, enabled }: { userId: string; 
     />
   );
 }
+
+/**
+ * Add-on "Creación automática en Jira/ClickUp" — al revés del anterior,
+ * arranca desactivado para todo el mundo. El super-admin lo enciende
+ * persona por persona (piloto, upventa manual, revocar por impago), nunca
+ * un beneficio automático de ningún plan.
+ */
+export function IntegrationsEnabledToggle({ userId, enabled }: { userId: string; enabled: boolean }) {
+  return (
+    <ToggleButton
+      endpoint={`/api/admin/users/${userId}`}
+      field="integrationsEnabled"
+      value={enabled}
+      labelOn="Activo"
+      labelOff="Inactivo"
+      activeIsGood={true}
+    />
+  );
+}

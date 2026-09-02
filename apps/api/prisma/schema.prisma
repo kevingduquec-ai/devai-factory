@@ -85,6 +85,40 @@ enum ExportFormat {
   docx
 }
 
+enum IntegrationProvider {
+  jira
+  clickup
+}
+
+enum IntegrationConnectionStatus {
+  active
+  expired
+  revoked
+}
+
+enum SyncStatus {
+  in_progress
+  completed
+  completed_with_errors
+  failed
+}
+
+enum SyncSourceType {
+  full_study
+  single_story
+}
+
+enum SyncItemType {
+  epic
+  user_story
+  test_case
+}
+
+enum SyncItemStatus {
+  created
+  failed
+}
+
 model Organization {
   id               String   @id @default(uuid())
   name             String
@@ -115,6 +149,8 @@ model Organization {
   generationRuns GenerationRun[]
   supportMessages SupportMessage[]
   supportConversation SupportConversation?
+  integrationConnections IntegrationConnection[]
+  syncRuns      SyncRun[]
 
   @@map("organizations")
 }
@@ -147,6 +183,12 @@ model User {
   // usuarios — el super-admin es el único que puede desactivarlo, y lo hace
   // persona por persona, no por organización. Ver ProjectsService.
   singleStoryEnabled Boolean @default(true) @map("single_story_enabled")
+  // Módulo add-on "Creación automática en Jira/ClickUp" — al revés del
+  // anterior, arranca desactivado: es un servicio adicional que el
+  // super-admin enciende persona por persona (piloto, upventa manual,
+  // revocar por impago), nunca un beneficio automático del plan. Ver
+  // IntegrationsService.assertIntegrationsEnabled.
+  integrationsEnabled Boolean @default(false) @map("integrations_enabled")
   createdAt    DateTime   @default(now()) @map("created_at")
   updatedAt    DateTime   @updatedAt @map("updated_at")
 
@@ -233,6 +275,7 @@ model Project {
   documentsExported    DocumentExported[]
   usageEvents          UsageEvent[]
   generationRuns       GenerationRun[]
+  syncRuns             SyncRun[]
 
   @@index([orgId])
   @@map("projects")
@@ -440,4 +483,93 @@ model GenerationRun {
 
   @@index([orgId, createdAt])
   @@map("generation_runs")
+}
+
+// Una conexión = una cuenta de Jira o ClickUp del cliente, conectada con su
+// propio token de API (no OAuth — ver nota en integrations/providers). El
+// token vive cifrado en reposo (encryptedToken, AES-256-GCM); nunca se
+// expone al frontend. targetId/targetLabel es el destino concreto elegido
+// dentro de la herramienta (clave de proyecto de Jira o id de lista de
+// ClickUp) — sin eso, y sin mappingConfirmed, la conexión no se puede usar
+// para enviar nada (ver IntegrationsService.triggerSync).
+model IntegrationConnection {
+  id                String   @id @default(uuid())
+  orgId             String   @map("org_id")
+  provider          IntegrationProvider
+  label             String
+  // Jira: URL base del sitio (https://empresa.atlassian.net). ClickUp: null.
+  siteUrl           String?  @map("site_url")
+  // Jira: correo asociado al API token, para Basic Auth. ClickUp: null.
+  authEmail         String?  @map("auth_email")
+  encryptedToken    String   @map("encrypted_token")
+  status            IntegrationConnectionStatus @default(active)
+  targetId          String?  @map("target_id")
+  targetLabel       String?  @map("target_label")
+  // "Foto" de la estructura detectada (proyectos/tipos de issue/campos en
+  // Jira; espacios/carpetas/listas/campos en ClickUp) — se refresca solo
+  // cuando el cliente pide "detectar de nuevo", nunca automáticamente.
+  structureSnapshot Json?    @map("structure_snapshot")
+  // Mapeo heurístico sugerido tras elegir el destino (tipos de issue para
+  // épica/historia/caso de prueba, campo de story points, etc.) — el
+  // cliente lo confirma una sola vez; queda fijo hasta que pida re-detectar.
+  mapping           Json?
+  mappingConfirmed  Boolean  @default(false) @map("mapping_confirmed")
+  createdBy         String   @map("created_by")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  syncRuns     SyncRun[]
+
+  @@index([orgId])
+  @@map("integration_connections")
+}
+
+// Un envío (batch) del contenido de un proyecto hacia una conexión —
+// registra qué se intentó, qué se creó y qué falló (auditoría, sección 5.6
+// del módulo). sourceType solo documenta de dónde vino el contenido; la
+// tubería de ejecución es la misma para ambos casos.
+model SyncRun {
+  id           String   @id @default(uuid())
+  orgId        String   @map("org_id")
+  connectionId String   @map("connection_id")
+  projectId    String   @map("project_id")
+  sourceType   SyncSourceType @map("source_type")
+  status       SyncStatus @default(in_progress)
+  startedAt    DateTime @default(now()) @map("started_at")
+  finishedAt   DateTime? @map("finished_at")
+  // Error de nivel conexión (ej. token revocado, detectado antes de
+  // intentar cualquier ítem) — distinto de los errores por ítem, que viven
+  // en SyncItem.errorMessage.
+  errorMessage String?  @map("error_message")
+  triggeredBy  String   @map("triggered_by")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  connection   IntegrationConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items        SyncItem[]
+
+  @@index([orgId, startedAt])
+  @@index([connectionId])
+  @@index([projectId])
+  @@map("sync_runs")
+}
+
+model SyncItem {
+  id           String   @id @default(uuid())
+  syncRunId    String   @map("sync_run_id")
+  itemType     SyncItemType @map("item_type")
+  // Código legible del origen (REQ-001, HU-003, CP-012) — no el uuid interno.
+  internalCode String   @map("internal_code")
+  internalTitle String  @map("internal_title")
+  externalId   String?  @map("external_id")
+  externalUrl  String?  @map("external_url")
+  status       SyncItemStatus
+  errorMessage String?  @map("error_message")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  syncRun SyncRun @relation(fields: [syncRunId], references: [id], onDelete: Cascade)
+
+  @@index([syncRunId])
+  @@map("sync_items")
 }

@@ -13,7 +13,7 @@ export class AdminOrganizationsService {
       orderBy: { createdAt: "desc" },
       include: {
         users: {
-          select: { id: true, email: true, name: true, role: true, singleStoryEnabled: true },
+          select: { id: true, email: true, name: true, role: true, singleStoryEnabled: true, integrationsEnabled: true },
           orderBy: { createdAt: "asc" },
         },
         _count: { select: { users: true, projects: true } },

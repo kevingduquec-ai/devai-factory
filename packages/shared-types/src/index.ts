@@ -109,6 +109,8 @@ export interface OrgUserDto {
   status: "invited" | "active";
   /** Módulo "Historia de usuario" — habilitado por defecto, el super-admin lo desactiva persona por persona. */
   singleStoryEnabled: boolean;
+  /** Add-on "Creación automática en Jira/ClickUp" — desactivado por defecto, el super-admin lo activa persona por persona. */
+  integrationsEnabled: boolean;
   createdAt: string;
 }
 
@@ -128,6 +130,7 @@ export interface AdminOrgUserDto {
   name: string;
   role: OrgRole;
   singleStoryEnabled: boolean;
+  integrationsEnabled: boolean;
 }
 
 export interface AdminOrganizationDto {
@@ -504,4 +507,91 @@ export interface AdminSupportThreadDto {
   organization: { id: string; name: string; plan: SubscriptionPlan };
   closed: boolean;
   messages: (SupportMessageDto & { senderUser: { name: string; email: string } | null })[];
+}
+
+// --- Módulo: creación automática en Jira/ClickUp -------------------------
+
+export const IntegrationProvider = {
+  JIRA: "jira",
+  CLICKUP: "clickup",
+} as const;
+export type IntegrationProvider = (typeof IntegrationProvider)[keyof typeof IntegrationProvider];
+
+export const INTEGRATION_PROVIDER_LABEL_ES: Record<IntegrationProvider, string> = {
+  jira: "Jira",
+  clickup: "ClickUp",
+};
+
+export interface IntegrationTargetOption {
+  id: string;
+  label: string;
+}
+
+export interface SuggestedMappingDto {
+  epicIssueTypeId?: string;
+  epicIssueTypeName?: string;
+  storyIssueTypeId?: string;
+  storyIssueTypeName?: string;
+  testCaseIssueTypeId?: string;
+  testCaseIssueTypeName?: string;
+  storyPointsFieldId?: string;
+  storyPointsFieldName?: string;
+  notes: string[];
+}
+
+export interface IntegrationConnectionDto {
+  id: string;
+  orgId: string;
+  provider: IntegrationProvider;
+  label: string;
+  siteUrl: string | null;
+  authEmail: string | null;
+  status: "active" | "expired" | "revoked";
+  targetId: string | null;
+  targetLabel: string | null;
+  mapping: SuggestedMappingDto | null;
+  mappingConfirmed: boolean;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ConnectIntegrationResultDto {
+  connection: IntegrationConnectionDto;
+  targets: IntegrationTargetOption[];
+}
+
+export interface SelectTargetResultDto {
+  connection: IntegrationConnectionDto;
+  suggestedMapping: SuggestedMappingDto;
+}
+
+export type SyncItemType = "epic" | "user_story" | "test_case";
+export type SyncItemStatus = "created" | "failed";
+
+export interface SyncItemDto {
+  id: string;
+  itemType: SyncItemType;
+  internalCode: string;
+  internalTitle: string;
+  externalId: string | null;
+  externalUrl: string | null;
+  status: SyncItemStatus;
+  errorMessage: string | null;
+  createdAt: string;
+}
+
+export type SyncStatus = "in_progress" | "completed" | "completed_with_errors" | "failed";
+
+export interface SyncRunDto {
+  id: string;
+  projectId: string;
+  connectionId: string;
+  connection: { provider: IntegrationProvider; label: string };
+  sourceType: "full_study" | "single_story";
+  status: SyncStatus;
+  startedAt: string;
+  finishedAt: string | null;
+  errorMessage: string | null;
+  items: SyncItemDto[];
 }

@@ -1,6 +1,11 @@
-import { IsBoolean } from "class-validator";
+import { IsBoolean, IsOptional } from "class-validator";
 
 export class UpdateUserAdminDto {
+  @IsOptional()
   @IsBoolean()
-  singleStoryEnabled!: boolean;
+  singleStoryEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  integrationsEnabled?: boolean;
 }
