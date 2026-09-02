@@ -1,0 +1,443 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrgRole {
+  owner
+  admin
+  member
+}
+
+enum UserStatus {
+  invited
+  active
+}
+
+enum SubscriptionPlan {
+  starter
+  team
+  empresa
+}
+
+enum SubscriptionStatus {
+  active
+  past_due
+  canceled
+  trialing
+}
+
+enum ProjectStatus {
+  intake
+  ready_to_generate
+  generating
+  generated
+  failed
+}
+
+enum RequirementPriority {
+  must
+  should
+  could
+  wont
+}
+
+enum RequirementType {
+  functional
+  non_functional
+}
+
+enum RequirementStatus {
+  draft
+  approved
+  implemented
+  obsolete
+}
+
+enum TestCaseType {
+  functional
+  negative
+  security
+  integration
+  regression
+  performance
+}
+
+enum TestCaseStatus {
+  not_executed
+  passed
+  failed
+  blocked
+}
+
+enum TestCaseSeverity {
+  alta
+  media
+  baja
+}
+
+enum ExportFormat {
+  pdf
+  docx
+}
+
+model Organization {
+  id               String   @id @default(uuid())
+  name             String
+  plan             SubscriptionPlan @default(starter)
+  billingCustomerId String? @map("billing_customer_id")
+  // Cuando está en true, ningún usuario de esta organización puede iniciar
+  // sesión ni mantener una sesión activa — se verifica en login, en
+  // refresh, y en cada request autenticado (JwtStrategy.validate), así que
+  // el bloqueo aplica incluso a un access token ya emitido, no solo a
+  // logins nuevos. Es independiente del campo `plan`: suspende el acceso
+  // sin perder el historial de qué plan tenía contratado.
+  suspended        Boolean  @default(false)
+  // Falso por defecto para toda organización nueva — un registro nunca
+  // desbloquea el producto por sí solo. Se vuelve true por dos caminos
+  // únicamente: (1) el webhook de Stripe confirma una suscripción pagada
+  // (BillingService.applySubscription), o (2) el super-admin la activa
+  // manualmente desde el panel. Mientras esté en false, el frontend confina
+  // a todos los usuarios de la organización a /dashboard/billing, y el
+  // backend rechaza crear o generar proyectos (ver ProjectsService).
+  subscriptionActive Boolean @default(false) @map("subscription_active")
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  users         User[]
+  projects      Project[]
+  subscriptions Subscription[]
+  usageEvents   UsageEvent[]
+  generationRuns GenerationRun[]
+  supportMessages SupportMessage[]
+  supportConversation SupportConversation?
+
+  @@map("organizations")
+}
+
+// Cuenta de plataforma, deliberadamente fuera del modelo de organizaciones
+// (no es un User ni tiene orgId) — ve y administra todas las
+// organizaciones clientes de Qubit. Nunca se expone un registro público
+// para este modelo; las cuentas se crean directamente en la base de datos.
+model PlatformAdmin {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  name         String
+  passwordHash String   @map("password_hash")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("platform_admins")
+}
+
+model User {
+  id           String     @id @default(uuid())
+  orgId        String     @map("org_id")
+  email        String     @unique
+  name         String
+  role         OrgRole    @default(member)
+  status       UserStatus @default(active)
+  passwordHash String?    @map("password_hash")
+  // El módulo "Historia de usuario" (título + descripción -> una sola
+  // historia) está disponible por defecto para todos los planes y todos los
+  // usuarios — el super-admin es el único que puede desactivarlo, y lo hace
+  // persona por persona, no por organización. Ver ProjectsService.
+  singleStoryEnabled Boolean @default(true) @map("single_story_enabled")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  organization    Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  projectsCreated Project[]    @relation("ProjectCreatedBy")
+  supportMessagesSent SupportMessage[]
+
+  @@index([orgId])
+  @@map("users")
+}
+
+// Chat de soporte — un hilo compartido por organización (cualquier persona
+// del equipo ve y puede escribir en el mismo hilo, sin importar su rol ni
+// el plan de la organización). Del otro lado, solo el super-admin puede
+// responder, nunca otro usuario de otra organización — por eso el lado
+// admin necesita leer y escribir en el hilo de cualquier organización
+// mediante bypassRls(), aunque el hilo en sí sigue protegido por RLS para
+// el lado de la organización.
+model SupportMessage {
+  id            String   @id @default(uuid())
+  orgId         String   @map("org_id")
+  // Quién envió el mensaje: un usuario de la organización (senderUserId),
+  // o el super-admin (senderIsAdmin = true, senderUserId queda null).
+  senderUserId  String?  @map("sender_user_id")
+  senderIsAdmin Boolean  @default(false) @map("sender_is_admin")
+  body          String
+  // Vistos aparte para cada lado: readByOrg solo aplica a mensajes del
+  // admin (¿ya lo vio alguien de la organización?), readByAdmin solo a
+  // mensajes de la organización (¿ya lo vio el super-admin?) — así cada
+  // lado tiene su propio contador de no leídos.
+  readByOrg     Boolean  @default(false) @map("read_by_org")
+  readByAdmin   Boolean  @default(false) @map("read_by_admin")
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  senderUser   User?        @relation(fields: [senderUserId], references: [id], onDelete: SetNull)
+
+  @@index([orgId, createdAt])
+  @@map("support_messages")
+}
+
+// Estado de "cerrada / abierta" del hilo de soporte de una organización.
+// Fila separada de SupportMessage a propósito: así no hace falta tocar los
+// mensajes existentes, y una organización sin fila acá se trata como
+// abierta por defecto. Solo el super-admin puede cerrarla — si la
+// organización vuelve a escribir en un hilo cerrado, se reabre sola (ver
+// SupportService.sendMessage), pero nunca por una acción explícita de
+// "reabrir" del lado de la organización, que no existe.
+model SupportConversation {
+  orgId     String    @id @map("org_id")
+  closed    Boolean   @default(false)
+  closedAt  DateTime? @map("closed_at")
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@map("support_conversations")
+}
+
+model Project {
+  id        String        @id @default(uuid())
+  orgId     String        @map("org_id")
+  name      String
+  domain    String?
+  status    ProjectStatus @default(intake)
+  // true = creado desde el módulo "Historia de usuario" (ProjectsService.
+  // createQuickStory), false = creado desde el módulo "Análisis completo"
+  // (ProjectsService.create). Son dos flujos de creación separados, nunca
+  // una elección dentro del mismo formulario — este campo solo registra por
+  // cuál de los dos pasó el proyecto. Queda fijo de por vida, incluida
+  // cualquier regeneración futura.
+  storiesOnly Boolean      @default(false) @map("stories_only")
+  createdBy String        @map("created_by")
+  createdAt DateTime      @default(now()) @map("created_at")
+  updatedAt DateTime      @updatedAt @map("updated_at")
+
+  organization        Organization         @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  creator              User                @relation("ProjectCreatedBy", fields: [createdBy], references: [id])
+  intakeSessions       IntakeSession[]
+  requirements         Requirement[]
+  dataModelEntities    DataModelEntity[]
+  apiEndpoints         ApiEndpoint[]
+  testCases            TestCase[]
+  documentsExported    DocumentExported[]
+  usageEvents          UsageEvent[]
+  generationRuns       GenerationRun[]
+
+  @@index([orgId])
+  @@map("projects")
+}
+
+model IntakeSession {
+  id        String   @id @default(uuid())
+  projectId String   @map("project_id")
+  messages  Json     @default("[]")
+  status    String   @default("open")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("intake_sessions")
+}
+
+model Requirement {
+  id          String              @id @default(uuid())
+  projectId   String              @map("project_id")
+  code        String
+  title       String
+  description String
+  type        RequirementType     @default(functional)
+  priority    RequirementPriority @default(should)
+  actor       String?             @map("actor")
+  // Criterios de aceptación propios del requerimiento (Dado/Cuando/Entonces,
+  // sin nombre de escenario) — distintos de los criterios Gherkin, con
+  // nombre de escenario, que viven en cada historia de usuario.
+  acceptanceCriteria Json          @default("[]") @map("acceptance_criteria")
+  businessRules      String?       @map("business_rules")
+  dependencies       String?
+  assumptions        String?
+  status             RequirementStatus @default(draft)
+  version            String        @default("1.0")
+  createdAt   DateTime            @default(now()) @map("created_at")
+  updatedAt   DateTime            @updatedAt @map("updated_at")
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  userStories UserStory[]
+
+  @@index([projectId])
+  @@unique([projectId, code])
+  @@map("requirements")
+}
+
+model UserStory {
+  id            String   @id @default(uuid())
+  projectId     String   @map("project_id")
+  requirementId String   @map("requirement_id")
+  code          String
+  title         String
+  actor         String
+  goal          String
+  benefit       String
+  priority      RequirementPriority? @map("priority")
+  storyPoints   Int?     @map("story_points")
+  dependencies  String?
+  definitionOfReady String? @map("definition_of_ready")
+  definitionOfDone  String? @map("definition_of_done")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
+
+  requirement        Requirement        @relation(fields: [requirementId], references: [id], onDelete: Cascade)
+  acceptanceCriteria AcceptanceCriterion[]
+
+  @@index([requirementId])
+  @@unique([projectId, code])
+  @@map("user_stories")
+}
+
+model AcceptanceCriterion {
+  id           String   @id @default(uuid())
+  userStoryId  String   @map("user_story_id")
+  scenarioName String   @map("scenario_name")
+  given        String
+  when         String
+  then         String
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  userStory UserStory  @relation(fields: [userStoryId], references: [id], onDelete: Cascade)
+  testCases TestCase[]
+
+  @@index([userStoryId])
+  @@map("acceptance_criteria")
+}
+
+model DataModelEntity {
+  id        String   @id @default(uuid())
+  projectId String   @map("project_id")
+  name      String
+  fields    Json     @default("[]")
+  relations Json     @default("[]")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("data_model_entities")
+}
+
+model ApiEndpoint {
+  id              String   @id @default(uuid())
+  projectId       String   @map("project_id")
+  method          String
+  path            String
+  description     String
+  requestSchema   Json?    @map("request_schema")
+  responseSchema  Json?    @map("response_schema")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("api_endpoints")
+}
+
+model TestCase {
+  id                    String       @id @default(uuid())
+  projectId             String       @map("project_id")
+  acceptanceCriteriaId  String       @map("acceptance_criteria_id")
+  code                  String
+  title                 String
+  type                  TestCaseType
+  precondition          String       @default("")
+  steps                 Json         @default("[]")
+  testData              String?      @map("test_data")
+  expectedResult        String       @map("expected_result")
+  actualResult          String?      @map("actual_result")
+  status                TestCaseStatus    @default(not_executed)
+  severity              TestCaseSeverity  @default(media)
+  createdAt             DateTime     @default(now()) @map("created_at")
+  updatedAt             DateTime     @updatedAt @map("updated_at")
+
+  project             Project              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  acceptanceCriterion AcceptanceCriterion  @relation(fields: [acceptanceCriteriaId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@unique([projectId, code])
+  @@map("test_cases")
+}
+
+model DocumentExported {
+  id           String       @id @default(uuid())
+  projectId    String       @map("project_id")
+  type         ExportFormat
+  fileUrl      String       @map("file_url")
+  generatedAt  DateTime     @default(now()) @map("generated_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("documents_exported")
+}
+
+model Subscription {
+  id                     String             @id @default(uuid())
+  orgId                  String             @map("org_id")
+  plan                   SubscriptionPlan
+  status                 SubscriptionStatus @default(trialing)
+  currentPeriodEnd       DateTime?          @map("current_period_end")
+  seats                  Int                @default(1)
+  stripeSubscriptionId   String?            @unique @map("stripe_subscription_id")
+  stripePriceId          String?            @map("stripe_price_id")
+  createdAt              DateTime           @default(now()) @map("created_at")
+  updatedAt              DateTime           @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+
+  @@index([orgId])
+  @@map("subscriptions")
+}
+
+model UsageEvent {
+  id        String   @id @default(uuid())
+  orgId     String   @map("org_id")
+  projectId String?  @map("project_id")
+  tokensIn  Int      @map("tokens_in")
+  tokensOut Int      @map("tokens_out")
+  stage     String
+  createdAt DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  project      Project?     @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([orgId])
+  @@map("usage_events")
+}
+
+// Un registro por cada vez que se dispara /generate (primera generación o
+// "Regenerar paquete completo") — cada una re-ejecuta el pipeline completo
+// de Claude y tiene un costo real de tokens, sin importar si el proyecto ya
+// contaba para la cuota mensual de "análisis nuevos". Sirve para aplicar un
+// tope aparte a las regeneraciones, que de otro modo no tendrían límite.
+model GenerationRun {
+  id        String   @id @default(uuid())
+  orgId     String   @map("org_id")
+  projectId String   @map("project_id")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  project      Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([orgId, createdAt])
+  @@map("generation_runs")
+}

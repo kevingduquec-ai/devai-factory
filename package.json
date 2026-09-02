@@ -1,0 +1,16 @@
+{
+  "name": "devai-factory",
+  "private": true,
+  "version": "0.1.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev:api": "pnpm --filter @devai-factory/api dev",
+    "dev:web": "pnpm --filter @devai-factory/web dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "prisma:generate": "pnpm --filter @devai-factory/api prisma:generate",
+    "prisma:migrate": "pnpm --filter @devai-factory/api prisma:migrate"
+  }
+}
