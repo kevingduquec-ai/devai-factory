@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
-import { Montserrat, Poppins, Roboto } from "next/font/google";
+import { Montserrat, Open_Sans, Poppins } from "next/font/google";
 import "./globals.css";
 
+// Tipografías del Manual de Marca Qubit 2025: "Titulares y encabezados:
+// Orbitron Bold / Montserrat ExtraBold" (usamos la alternativa Montserrat
+// para no introducir una fuente display nueva en un producto ya en
+// producción), "Subtítulos: Poppins SemiBold", "Textos largos: Open Sans
+// Regular" — Open Sans reemplaza a Roboto, que no está en el manual.
 const montserrat = Montserrat({
   variable: "--font-montserrat",
   subsets: ["latin"],
@@ -14,10 +19,10 @@ const poppins = Poppins({
   weight: ["500", "600"],
 });
 
-const roboto = Roboto({
-  variable: "--font-roboto",
+const openSans = Open_Sans({
+  variable: "--font-open-sans",
   subsets: ["latin"],
-  weight: ["300", "400", "500"],
+  weight: ["400", "500", "700"],
 });
 
 export const metadata: Metadata = {
@@ -30,7 +35,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="es"
-      className={`${montserrat.variable} ${poppins.variable} ${roboto.variable} h-full antialiased`}
+      className={`${montserrat.variable} ${poppins.variable} ${openSans.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">{children}</body>
     </html>

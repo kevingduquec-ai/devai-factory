@@ -192,7 +192,7 @@ function RunRow({ run }: { run: QaTestRunDto }) {
               <span className="text-muted">
                 {item.testCase.code} — {item.testCase.title}
               </span>
-              <span className={item.status === "passed" ? "text-qubit-green" : "text-red-600"}>{RUN_STATUS_LABEL[item.status]}</span>
+              <span className={item.status === "passed" ? "text-green-700 dark:text-qubit-green" : "text-red-600"}>{RUN_STATUS_LABEL[item.status]}</span>
             </li>
           ))}
         </ul>

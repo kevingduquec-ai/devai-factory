@@ -1,36 +1,39 @@
 @import "tailwindcss";
 
 /*
- * Paleta de marca Qubit — extraída del manual de marca (muestreo de píxeles,
- * ya que las etiquetas hex del PPTX tenían errores de copiado):
- *   Azul principal (navy):  #0A1931
- *   Azul secundario:        #195F9F
- *   Azul brillante/acento:  #1598D3
- *   Verde acento:           #59C141
- *   Gris claro:             #E2E5E4
- * Tipografía: Montserrat (títulos), Poppins (acentos/UI), Roboto (cuerpo).
+ * Paleta de marca Qubit — valores EXACTOS del Manual de Marca Qubit 2025
+ * (verificados directamente contra el XML del PPTX, no una lectura visual):
+ *   Primario Azul Profundo:  #042954
+ *   Secundario Azul Turquesa: #00AEEF
+ *   Acento Verde:            #80FF72
+ *   Fondo Neutro Gris Claro: #F5F7FA
+ *   Texto Base Gris Oscuro:  #333333
+ * Tipografía: Montserrat ExtraBold (títulos), Poppins SemiBold (acentos/UI),
+ * Open Sans Regular (cuerpo). "qubit-blue-600"/"qubit-cyan" se conservan
+ * como tonos derivados (hover, degradados) — no son colores de marca en sí,
+ * solo variaciones del turquesa oficial para dar rango tonal a la UI.
  */
 :root {
-  --qubit-navy: #0a1931;
-  --qubit-navy-800: #122a4d;
-  --qubit-blue-600: #195f9f;
-  --qubit-blue-400: #1598d3;
-  --qubit-cyan: #0eebd9;
-  --qubit-green: #59c141;
-  --qubit-gray-50: #f6f7f8;
-  --qubit-gray-100: #e2e5e4;
+  --qubit-navy: #042954;
+  --qubit-navy-800: #06356b;
+  --qubit-blue-600: #0092c9;
+  --qubit-blue-400: #00aeef;
+  --qubit-cyan: #4dd9ff;
+  --qubit-green: #80ff72;
+  --qubit-gray-50: #f5f7fa;
+  --qubit-gray-100: #e5e9ee;
   --qubit-gray-300: #c7ccd1;
 
   --background: var(--qubit-gray-50);
   --foreground: var(--qubit-navy);
   --surface: #ffffff;
   --border: var(--qubit-gray-100);
-  --muted: #5b6577;
+  --muted: #333333;
 
   --primary: var(--qubit-navy);
   --primary-foreground: #ffffff;
   --accent: var(--qubit-blue-400);
-  --accent-foreground: #ffffff;
+  --accent-foreground: #042954;
   --success: var(--qubit-green);
 }
 
@@ -55,7 +58,7 @@
   --color-qubit-gray-100: var(--qubit-gray-100);
   --color-qubit-gray-300: var(--qubit-gray-300);
 
-  --font-sans: var(--font-roboto);
+  --font-sans: var(--font-open-sans);
   --font-heading: var(--font-montserrat);
   --font-accent: var(--font-poppins);
 }
@@ -83,6 +86,7 @@ h2,
 h3,
 .font-heading {
   font-family: var(--font-heading), var(--font-sans), sans-serif;
+  font-weight: 800; /* Manual de Marca: "Titulares y encabezados: Montserrat ExtraBold" */
 }
 
 .font-accent {
@@ -93,7 +97,7 @@ h3,
 .qubit-circuit-bg {
   background-color: var(--qubit-navy);
   background-image:
-    linear-gradient(90deg, rgba(21, 152, 211, 0.12) 1px, transparent 1px),
-    linear-gradient(rgba(21, 152, 211, 0.12) 1px, transparent 1px);
+    linear-gradient(90deg, rgba(0, 174, 239, 0.14) 1px, transparent 1px),
+    linear-gradient(rgba(0, 174, 239, 0.14) 1px, transparent 1px);
   background-size: 28px 28px;
 }

@@ -137,7 +137,7 @@ export function SupportWidget() {
                     className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${
                       m.senderIsAdmin
                         ? "bg-qubit-gray-100 text-foreground dark:bg-white/10"
-                        : "bg-qubit-blue-400 text-white"
+                        : "bg-qubit-blue-400 text-qubit-navy"
                     }`}
                   >
                     {m.senderIsAdmin ? (
@@ -182,7 +182,7 @@ export function SupportWidget() {
               <button
                 type="submit"
                 disabled={sending || !draft.trim()}
-                className="font-accent shrink-0 rounded-md bg-qubit-blue-400 px-3 py-2 text-sm font-semibold text-white transition hover:bg-qubit-blue-600 disabled:opacity-50"
+                className="font-accent shrink-0 rounded-md bg-qubit-blue-400 px-3 py-2 text-sm font-semibold text-qubit-navy transition hover:bg-qubit-blue-600 hover:text-white disabled:opacity-50"
               >
                 {sending ? <Spinner className="h-4 w-4" /> : "Enviar"}
               </button>
@@ -194,7 +194,7 @@ export function SupportWidget() {
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="relative flex h-14 w-14 items-center justify-center rounded-full bg-qubit-blue-400 text-white shadow-lg shadow-qubit-blue-400/30 transition hover:bg-qubit-blue-600"
+        className="relative flex h-14 w-14 items-center justify-center rounded-full bg-qubit-blue-400 text-qubit-navy shadow-lg shadow-qubit-blue-400/30 transition hover:bg-qubit-blue-600 hover:text-white"
         aria-label={open ? "Cerrar chat de soporte" : "Abrir chat de soporte"}
       >
         <ChatBubbleIcon />

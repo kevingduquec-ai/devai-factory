@@ -20,7 +20,7 @@ export default function LandingPage() {
       <div className="flex gap-4">
         <Link
           href="/register"
-          className="font-accent rounded-md bg-qubit-blue-400 px-5 py-2.5 text-sm font-semibold text-white shadow-lg shadow-qubit-blue-400/20 transition hover:bg-qubit-blue-600"
+          className="font-accent rounded-md bg-qubit-blue-400 px-5 py-2.5 text-sm font-semibold text-qubit-navy shadow-lg shadow-qubit-blue-400/20 transition hover:bg-qubit-blue-600 hover:text-white"
         >
           Crear cuenta
         </Link>

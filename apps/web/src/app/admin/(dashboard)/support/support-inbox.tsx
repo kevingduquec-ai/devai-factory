@@ -211,7 +211,7 @@ export function SupportInbox({ initialConversations }: { initialConversations: A
                     <div
                       className={`max-w-[70%] rounded-lg px-3 py-2 text-sm ${
                         m.senderIsAdmin
-                          ? "bg-qubit-blue-400 text-white"
+                          ? "bg-qubit-blue-400 text-qubit-navy"
                           : "bg-qubit-gray-100 text-foreground dark:bg-white/10"
                       }`}
                     >
@@ -250,7 +250,7 @@ export function SupportInbox({ initialConversations }: { initialConversations: A
                 <button
                   type="submit"
                   disabled={sending || !draft.trim()}
-                  className="font-accent shrink-0 rounded-md bg-qubit-blue-400 px-4 py-2 text-sm font-semibold text-white transition hover:bg-qubit-blue-600 disabled:opacity-50"
+                  className="font-accent shrink-0 rounded-md bg-qubit-blue-400 px-4 py-2 text-sm font-semibold text-qubit-navy transition hover:bg-qubit-blue-600 hover:text-white disabled:opacity-50"
                 >
                   {sending ? <Spinner className="h-4 w-4" /> : "Enviar"}
                 </button>
