@@ -17,6 +17,8 @@ export interface PageStructure {
   buttons: DiscoveredElement[];
   links: DiscoveredElement[];
   inputs: DiscoveredInput[];
+  /** Texto visible suelto (contadores, badges, mensajes de estado) que no es botón/link/encabezado — sin esto, un assert_text sobre "cuántos productos hay en el carrito" o similar no tiene ningún dato real con qué compararse, y el generador de casos termina inventando el texto. */
+  textSnippets: string[];
 }
 
 const DEFAULT_TIMEOUT_MS = 10000;
@@ -88,7 +90,28 @@ export async function discoverPageStructure(page: Page): Promise<PageStructure> 
       .filter((t) => t.length > 0)
       .slice(0, 10);
 
-    return { url: window.location.href, title: document.title, headings, buttons, links, inputs };
+    // Texto visible que NO es botón/link/input/encabezado: contadores de
+    // carrito, badges, mensajes de confirmación, precios, estados — lo que
+    // un caso normalmente necesita para un assert_text real. Solo nodos
+    // hoja (sin hijos) para no capturar contenedores enteros con texto
+    // repetido, y se descarta lo que ya vive dentro de un control
+    // interactivo (ya cubierto arriba).
+    const seenTexts = new Set<string>([...buttons.map((b) => b.text), ...links.map((l) => l.text), ...headings]);
+    const textSnippets: string[] = [];
+    for (const el of Array.from(document.querySelectorAll("body *"))) {
+      if (textSnippets.length >= 18) break;
+      if (!(el instanceof HTMLElement)) continue;
+      if (el.offsetParent === null) continue;
+      if (el.closest('button, a, [role="button"], input, select, textarea')) continue;
+      if (el.children.length > 0) continue;
+      const text = (el.textContent || "").trim();
+      if (text.length === 0 || text.length > 50) continue;
+      if (seenTexts.has(text)) continue;
+      seenTexts.add(text);
+      textSnippets.push(text);
+    }
+
+    return { url: window.location.href, title: document.title, headings, buttons, links, inputs, textSnippets };
   }, MAX_ELEMENTS);
 }
 
@@ -322,19 +345,88 @@ export async function autoBuildLoginSetupSteps(params: { targetUrl: string; emai
   }
 }
 
+const SPANISH_STOPWORDS = new Set([
+  "para",
+  "debe",
+  "esta",
+  "este",
+  "esto",
+  "sobre",
+  "como",
+  "cada",
+  "desde",
+  "hasta",
+  "cuando",
+  "donde",
+  "pero",
+  "que",
+  "los",
+  "las",
+  "una",
+  "uno",
+  "con",
+  "sin",
+  "por",
+  "del",
+  "modulo",
+  "módulo",
+  "pagina",
+  "página",
+  "verifica",
+  "verificar",
+  "validar",
+  "prueba",
+  "pruebas",
+  "test",
+  "aplicacion",
+  "aplicación",
+]);
+
+const COMBINING_DIACRITICS = new RegExp("[\\u0300-\\u036f]", "g");
+
+function normalizeText(text: string): string {
+  return text.toLowerCase().normalize("NFD").replace(COMBINING_DIACRITICS, "");
+}
+
+/** Palabras significativas (>=4 letras, sin muletillas) de la descripción del módulo — para buscar de verdad la pantalla que el cliente pidió probar, en vez de quedarse en la primera que aparezca. */
+function extractKeywords(text: string): string[] {
+  return Array.from(
+    new Set(
+      normalizeText(text)
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((w) => w.length >= 4 && !SPANISH_STOPWORDS.has(w)),
+    ),
+  );
+}
+
+function scoreAgainstKeywords(candidateText: string, keywords: string[]): number {
+  const normalized = normalizeText(candidateText);
+  return keywords.filter((k) => normalized.includes(k)).length;
+}
+
+const MAX_RELEVANCE_HOPS = 2;
+
 /**
  * Ejecuta la precondición del módulo (si tiene) y captura el mapa
- * funcional de la página resultante — y, en Modo A, de un puñado de
- * páginas más alcanzables desde ahí (rastreo superficial, un solo nivel,
- * para mantener el costo bajo). Esta es la Fase 1 completa: en Modo B
- * produce el mapa de un módulo puntual; en Modo A, un mapa de varias
- * pantallas de la app.
+ * funcional de la página resultante. En Modo A (exploración completa)
+ * también recorre un puñado de páginas más alcanzables desde ahí, sin
+ * filtrar por relevancia (rastreo amplio deliberado). En Modo B (puntual,
+ * el recomendado) el usuario describió una funcionalidad concreta — si esa
+ * funcionalidad no vive en la página donde termina la precondición (lo más
+ * común: login deja al navegador en el dashboard, no en "Facturación"),
+ * quedarse ahí produce casos que no corresponden a nada real. Por eso acá
+ * también se sigue, hasta dos saltos, el link o botón visible cuyo texto
+ * mejor coincide con las palabras clave de la descripción — así el
+ * generador de casos ve la pantalla real, no solo la de entrada.
  */
 export async function runDiscovery(params: {
   targetUrl: string;
   setupSteps: QaStep[];
   scopeMode: "scoped" | "full";
   crawlLimit?: number;
+  /** Nombre + descripción del módulo — guía qué página real buscar en Modo B. */
+  relevanceText?: string;
 }): Promise<{ pages: PageStructure[] }> {
   const browser = await chromium.launch({ headless: true });
   try {
@@ -365,6 +457,50 @@ export async function runDiscovery(params: {
           pages.push(await discoverPageStructure(page));
         } catch {
           // una página que no carga no debe tumbar todo el descubrimiento
+        }
+      }
+    } else if (params.relevanceText) {
+      const keywords = extractKeywords(params.relevanceText);
+      if (keywords.length > 0) {
+        const visitedUrls = new Set([page.url()]);
+        for (let hop = 0; hop < MAX_RELEVANCE_HOPS; hop++) {
+          const current = pages[pages.length - 1]!;
+          const candidates = [
+            ...current.links.map((l) => ({ text: l.text, selector: l.selector, kind: "link" as const })),
+            ...current.buttons.map((b) => ({ text: b.text, selector: b.selector, kind: "button" as const })),
+          ]
+            .map((c) => ({ ...c, score: scoreAgainstKeywords(c.text, keywords) }))
+            .filter((c) => c.score > 0)
+            .sort((a, b) => b.score - a.score);
+          const best = candidates[0];
+          if (!best) break;
+
+          try {
+            if (best.kind === "link") {
+              const url = new URL(best.selector, page.url()).toString();
+              if (visitedUrls.has(url)) break;
+              await page.goto(url, { timeout: DEFAULT_TIMEOUT_MS });
+            } else {
+              const urlBefore = page.url();
+              await page.locator(best.selector).first().click({ timeout: DEFAULT_TIMEOUT_MS });
+              await settleAfterNavigation(page);
+              if (page.url() === urlBefore) {
+                // No cambió la URL — puede haber abierto un modal o expandido
+                // contenido en la misma página. Igual vale la pena
+                // recapturar la estructura una vez, pero no seguir saltando
+                // desde acá (no hay una URL nueva que marcar como visitada).
+                pages.push(await discoverPageStructure(page));
+                break;
+              }
+            }
+            await settleAfterNavigation(page);
+            const url = page.url();
+            if (visitedUrls.has(url)) break;
+            visitedUrls.add(url);
+            pages.push(await discoverPageStructure(page));
+          } catch {
+            break; // el salto de relevancia es best-effort — nunca tumba el descubrimiento
+          }
         }
       }
     }

@@ -4,7 +4,7 @@ import type { Queue } from "bullmq";
 import type { QaMissingDataRequest, QaTestCase } from "@prisma/client";
 import { TenantPrismaService } from "../prisma/tenant-prisma.service";
 import { ClaudeClient } from "../orchestrator/claude-client";
-import { runQaTestCasesStage } from "../orchestrator/stages/qa-test-cases.stage";
+import { runQaTestCasesStage, type QaTestCaseDraft } from "../orchestrator/stages/qa-test-cases.stage";
 import { encryptSecret, decryptSecret } from "../common/crypto";
 import { CreateQaModuleDto } from "./dto/create-qa-module.dto";
 import { UpdateSetupStepsDto } from "./dto/update-setup-steps.dto";
@@ -16,6 +16,68 @@ import type { QaStep } from "./qa-step.types";
 
 function padCode(prefix: string, i: number) {
   return `${prefix}-${String(i + 1).padStart(3, "0")}`;
+}
+
+interface DiscoveredPageLike {
+  headings?: string[];
+  buttons?: { text: string }[];
+  links?: { text: string }[];
+  textSnippets?: string[];
+}
+
+/** Todo el texto real que el sistema efectivamente vio en el módulo — la única fuente válida para una aserción de texto. */
+function collectKnownTexts(discoveredStructure: unknown): string[] {
+  const pages = (discoveredStructure as { pages?: DiscoveredPageLike[] } | undefined)?.pages ?? [];
+  const texts: string[] = [];
+  for (const p of pages) {
+    texts.push(...(p.headings ?? []));
+    texts.push(...(p.buttons ?? []).map((b) => b.text));
+    texts.push(...(p.links ?? []).map((l) => l.text));
+    texts.push(...(p.textSnippets ?? []));
+  }
+  return texts;
+}
+
+function isTextGrounded(value: string, knownTexts: string[]): boolean {
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return true;
+  return knownTexts.some((t) => {
+    const known = t.trim().toLowerCase();
+    return known === normalized || known.includes(normalized) || normalized.includes(known);
+  });
+}
+
+/**
+ * Red de seguridad mecánica contra el error más común de este pipeline: la
+ * IA inventando cómo se ve un resultado exitoso (ej. "Mi carrito (1)")
+ * aunque el prompt se lo prohíba explícitamente — un caso real ya
+ * demostró que la instrucción sola no basta. En vez de confiar solo en
+ * que el modelo obedezca, cada assert_text/wait_for_text con un valor
+ * literal se verifica contra el mapa REAL que el sistema efectivamente
+ * capturó; si ese texto exacto no aparece ahí, el paso se convierte en
+ * una pregunta al cliente (mismo mecanismo que ya existe para
+ * credenciales) en vez de dejar pasar una aserción que nunca se va a
+ * cumplir en la corrida real.
+ */
+function groundOrAskInstead(draft: QaTestCaseDraft, knownTexts: string[]): QaTestCaseDraft {
+  let counter = 0;
+  const missingData = [...draft.missingData];
+  const steps = draft.steps.map((step) => {
+    const isTextAssertion = step.action === "assert_text" || step.action === "wait_for_text";
+    if (!isTextAssertion || !step.value || step.dataRef) return step;
+    if (isTextGrounded(step.value, knownTexts)) return step;
+
+    counter += 1;
+    const fieldKey = `texto_sin_confirmar_${counter}`;
+    missingData.push({
+      fieldKey,
+      kind: "business",
+      question: `El sistema no pudo confirmar en la página real qué texto exacto aparece para: "${step.description}". ¿Cuál es el texto exacto que debería verse en pantalla?`,
+      format: "texto exacto tal como aparece en pantalla",
+    });
+    return { ...step, value: null, dataRef: fieldKey };
+  });
+  return { ...draft, steps, missingData };
 }
 
 function runJobId(runId: string) {
@@ -87,13 +149,12 @@ export class QaService {
     await this.assertQaAutomationEnabled(userId);
 
     let setupSteps = dto.setupSteps;
-    let discoveredStructure: { pages: unknown[] } | undefined;
 
     // Atajo "solo con la URL": si no armaron los pasos a mano pero dieron
     // correo+contraseña, se detecta el formulario de login solo. Si no se
     // encuentra, NUNCA se bloquea la creación (sección 5 del módulo: el
-    // sistema debe avanzar, no detenerse en seco) — se guarda igual el mapa
-    // de la última pantalla alcanzada, para que al generar casos la IA vea
+    // sistema debe avanzar, no detenerse en seco) — se sigue igual a la
+    // Fase 1 de abajo con lo que haya, para que al generar casos la IA vea
     // algo real (puede incluir el propio formulario de login) y, si hace
     // falta autenticarse, lo pida como dato faltante en el caso en vez de
     // dejar al cliente sin ninguna forma de avanzar.
@@ -106,18 +167,35 @@ export class QaService {
       if (result.steps) {
         setupSteps = result.steps as unknown as typeof setupSteps;
       }
-      discoveredStructure = { pages: [result.structure] };
     }
+
+    const scopeMode = (dto.scopeMode as "scoped" | "full") ?? "scoped";
+
+    // Fase 1 real, siempre — no solo cuando hay login: un módulo sin
+    // credenciales (la app ya es pública, o no necesita sesión) merece el
+    // mismo análisis real de la pantalla que el cliente describió, en vez
+    // de quedarse sin ningún mapa hasta que alguien apriete "Detectar de
+    // nuevo" a mano. `relevanceText` guía la exploración hacia la
+    // funcionalidad descrita (ver runDiscovery) — sin esto, un módulo
+    // "puntual" se queda en la primera pantalla alcanzada aunque lo pedido
+    // viva en otra ruta, y los casos generados después no corresponden a
+    // la plataforma real.
+    const { pages } = await runDiscovery({
+      targetUrl: dto.targetUrl,
+      setupSteps: setupSteps as unknown as QaStep[],
+      scopeMode,
+      relevanceText: `${dto.name} ${dto.description}`,
+    });
 
     return this.tenant.client.qaTestModule.create({
       data: {
         orgId,
         name: dto.name,
         targetUrl: dto.targetUrl,
-        scopeMode: (dto.scopeMode as "scoped" | "full") ?? "scoped",
+        scopeMode,
         description: dto.description,
         setupSteps: setupSteps as unknown as object[],
-        ...(discoveredStructure ? { discoveredStructure: discoveredStructure as unknown as object } : {}),
+        discoveredStructure: { pages } as unknown as object,
         createdBy: userId,
       },
     });
@@ -138,6 +216,7 @@ export class QaService {
       targetUrl: module.targetUrl,
       setupSteps: (module.setupSteps ?? []) as unknown as QaStep[],
       scopeMode: module.scopeMode,
+      relevanceText: `${module.name} ${module.description}`,
     });
 
     return this.tenant.client.qaTestModule.update({
@@ -215,9 +294,11 @@ export class QaService {
 
     const existingCount = await this.tenant.client.qaTestCase.count({ where: { moduleId } });
     const created: QaTestCase[] = [];
+    const knownTexts = collectKnownTexts(module.discoveredStructure);
+    const groundedDrafts = result.data.testCases.map((draft) => groundOrAskInstead(draft, knownTexts));
 
     await this.tenant.client.$transaction(async (tx) => {
-      for (const [i, draft] of result.data.testCases.entries()) {
+      for (const [i, draft] of groundedDrafts.entries()) {
         const hasMissingData = draft.missingData.length > 0;
         const testCase = await tx.qaTestCase.create({
           data: {

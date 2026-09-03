@@ -125,26 +125,44 @@ export async function buildQaReport(data: QaReportData): Promise<Buffer> {
 
     if (c.screenshotFiles.length > 0) {
       label("Evidencia");
-      const thumbWidth = 150;
-      const rowHeight = 120;
-      ensureSpace(rowHeight + 10);
-      let x = contentLeft;
-      const rowY = doc.y;
-      for (const file of c.screenshotFiles.slice(0, 4)) {
-        const filePath = join(data.evidenceDir, file);
-        if (!existsSync(filePath)) continue;
-        if (x + thumbWidth > doc.page.width - doc.page.margins.right) {
-          x = contentLeft;
-          doc.y += rowHeight;
-        }
-        try {
-          doc.image(filePath, x, doc.y, { width: thumbWidth });
-        } catch {
-          // captura corrupta o ilegible — se omite sin interrumpir el reporte
-        }
-        x += thumbWidth + 10;
+      // Antes: 150pt de ancho, hasta 4 por fila y tope de 4 capturas —
+      // demasiado chico para leer un mensaje de error o el estado real de
+      // la pantalla, y sin forma de saber a qué paso correspondía cada
+      // una. Ahora: 2 por fila a todo lo ancho disponible (misma
+      // proporción 1280x800 del viewport real capturado, así no se
+      // distorsiona), con el número de paso como pie de foto, y se
+      // muestran TODAS las capturas del caso, no solo las primeras 4.
+      const gap = 14;
+      const perRow = 2;
+      const imgWidth = (contentWidth - gap * (perRow - 1)) / perRow;
+      const imgHeight = imgWidth * (800 / 1280);
+      const captionHeight = 14;
+      const rowHeight = imgHeight + captionHeight;
+
+      const validFiles = c.screenshotFiles
+        .map((file, stepIndex) => ({ file, stepIndex }))
+        .filter(({ file }) => existsSync(join(data.evidenceDir, file)));
+
+      for (let i = 0; i < validFiles.length; i += perRow) {
+        ensureSpace(rowHeight + 10);
+        const rowY = doc.y;
+        const rowItems = validFiles.slice(i, i + perRow);
+        rowItems.forEach(({ file, stepIndex }, col) => {
+          const x = contentLeft + col * (imgWidth + gap);
+          try {
+            doc.image(join(data.evidenceDir, file), x, rowY, { width: imgWidth });
+          } catch {
+            // captura corrupta o ilegible — se omite sin interrumpir el reporte
+          }
+          doc
+            .font("Sans")
+            .fontSize(7.5)
+            .fillColor(COLORS.grayText)
+            .text(`Paso ${stepIndex + 1}`, x, rowY + imgHeight + 2, { width: imgWidth, align: "center" })
+            .fillColor("black");
+        });
+        doc.y = rowY + rowHeight;
       }
-      doc.y = rowY + rowHeight;
       doc.x = contentLeft;
     }
 

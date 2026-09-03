@@ -74,7 +74,9 @@ Reglas estrictas:
    aria-label, role) sobre CSS genérico o posicional — un CSS frágil rompe
    el script con el primer cambio de estilo. Si se te da un mapa funcional
    real de la página, usa EXACTAMENTE los selectores y textos que aparecen
-   ahí — nunca inventes un botón, campo o texto que no está en ese mapa.
+   ahí (incluyendo "textSnippets" — texto visible suelto como contadores,
+   precios o mensajes de estado) — nunca inventes un botón, campo o texto
+   que no está en ese mapa.
 3. NUNCA inventes un dato que no tienes (una contraseña, un ID válido, un
    rango de precio de negocio). Si un paso necesita un valor que no se
    dio en la descripción, dejas value en null, pones un dataRef en
@@ -86,9 +88,17 @@ Reglas estrictas:
    y verificable por máquina: un mensaje de éxito visible, un código de
    estado, un cambio de URL, un dato reflejado en pantalla — nunca "se ve
    bien" o "funciona correctamente".
-5. Cubre primero el camino principal de negocio, y agrega al menos un caso
-   alterno o negativo razonable (dato inválido, permiso denegado, campo
-   vacío) cuando aplique — prioriza por severidad, no por cantidad.
+5. Cubre primero el camino principal de negocio, y agrega tantos casos
+   alternos o negativos como el mapa funcional realmente sostenga (dato
+   inválido, permiso denegado, campo vacío, límite de negocio, formato
+   incorrecto) — nunca por relleno, pero tampoco te quedes corto: si el
+   mapa muestra un formulario con varios campos, cada campo requerido
+   amerita su propio caso de validación; si muestra una acción reversible
+   (agregar/quitar, activar/desactivar), prueba también el camino inverso.
+   Como referencia, un módulo con contenido real normalmente da para 4 a 8
+   casos — menos que eso casi siempre significa que falta explorar el mapa,
+   no que el módulo sea simple. Prioriza por severidad al ordenar, nunca
+   para recortar cobertura real.
 6. Si ya existe una precondición (te lo digo explícitamente), NUNCA repitas
    el login o la navegación de acceso — esos pasos ya viven ahí, no en tus
    casos. Si NO existe precondición todavía, el sistema no logró armar el
@@ -128,7 +138,99 @@ Reglas estrictas:
    funcional que lleva a otra ruta), el caso tiene que incluir, como
    primeros pasos, el click o goto que lo lleva hasta ahí, ANTES de
    cualquier fill o assert sobre esa pantalla. Nunca asumas que ya estás
-   en la pantalla correcta solo porque la descripción la menciona.`;
+   en la pantalla correcta solo porque la descripción la menciona.
+8. El error más grave y más común en este trabajo: inventar CÓMO se ve el
+   resultado exitoso, completando con suposición la parte que el mapa no
+   confirma. Este es un caso real que ya pasó y que NUNCA debes repetir:
+   el mapa mostraba el texto "Tu carrito está vacío" (un textSnippet real)
+   y un botón "Agregar al carrito" — pero NINGUNA página mostraba jamás un
+   contador con número, tipo "Mi carrito (0)" o "Carrito (1)". La
+   respuesta incorrecta fue inventar que sí existía ese contador
+   ("Mi carrito (1)") solo porque suena a como "suelen" verse los
+   carritos de compra — eso NO es un hecho observado en este sitio, es un
+   patrón genérico de e-commerce que puede o no aplicar acá. Ver un texto
+   PARECIDO en el mapa (ej. "Tu carrito está vacío") no te autoriza a
+   inventar una VARIANTE de ese texto con un número que nunca viste
+   (ej. "Mi carrito (0)") — cada string que uses en value/assert_text
+   tiene que ser una copia EXACTA de algo que aparece en headings,
+   botones, links o textSnippets, carácter por carácter, nunca una
+   versión "razonable" o "probable" de eso.
+   Antes de escribir un expectedResult o un assert_text/wait_for_text,
+   busca ese texto EXACTO en el mapa. Si no aparece tal cual:
+   - Prefiere verificar algo que SÍ está confirmado en el mapa: un cambio
+     de URL (assert_url), la aparición/desaparición de un elemento ya
+     listado (assert_element_visible), o un texto real que el mapa sí
+     muestra en otra parte de la pantalla (como "Tu carrito está vacío"
+     desapareciendo, si eso SÍ está confirmado).
+   - Si ninguna de esas alternativas prueba de verdad lo que el caso
+     necesita verificar, NO inventes el texto — agrega un dataRef y su
+     missingData (kind "business") preguntando exactamente qué texto o
+     comportamiento visible confirma ese resultado en esta plataforma
+     específica (ej. "¿qué texto exacto aparece cuando un producto se
+     agrega al carrito?"). Es exactamente el mismo mecanismo que ya usas
+     para credenciales — aplícalo también a comportamientos de la UI que
+     no puedes confirmar con lo que tienes. Una pregunta honesta vale
+     infinitamente más que una aserción que parece razonable pero prueba
+     algo que nunca vas a ver en pantalla.`;
+
+interface DiscoveredEl {
+  text: string;
+  selector: string;
+}
+interface DiscoveredPage {
+  url: string;
+  title: string;
+  headings: string[];
+  buttons: DiscoveredEl[];
+  links: DiscoveredEl[];
+  inputs: unknown[];
+  textSnippets: string[];
+}
+
+/**
+ * En Modo A (exploración completa) el mismo header/nav (logo, "Categorías",
+ * "Hola, inicia sesión"...) aparece repetido en cada una de las páginas
+ * rastreadas — con 8-9 páginas eso son cientos de líneas de JSON
+ * redundante que solo infla el prompt y empujó una respuesta real a
+ * truncarse a mitad de un string (Claude terminó gastando su presupuesto
+ * de salida antes de cerrar el JSON). Factoriza lo que se repite en TODAS
+ * las páginas a un solo bloque "elementos comunes", y deja cada página
+ * solo con lo que tiene de único — misma información real, mucho menos
+ * texto repetido.
+ */
+function compactDiscoveredStructure(pages: DiscoveredPage[]): unknown {
+  if (pages.length <= 1) return { pages };
+
+  function commonByText<T extends DiscoveredEl>(lists: T[][]): T[] {
+    const [first, ...rest] = lists;
+    return (first ?? []).filter((el) => rest.every((list) => list.some((o) => o.text === el.text)));
+  }
+  function commonStrings(lists: string[][]): string[] {
+    const [first, ...rest] = lists;
+    return (first ?? []).filter((s) => rest.every((list) => list.includes(s)));
+  }
+
+  const commonButtons = commonByText(pages.map((p) => p.buttons ?? []));
+  const commonLinks = commonByText(pages.map((p) => p.links ?? []));
+  const commonSnippets = commonStrings(pages.map((p) => p.textSnippets ?? []));
+
+  const commonButtonTexts = new Set(commonButtons.map((b) => b.text));
+  const commonLinkTexts = new Set(commonLinks.map((l) => l.text));
+  const commonSnippetTexts = new Set(commonSnippets);
+
+  return {
+    elementosComunesEnTodasLasPaginas: { buttons: commonButtons, links: commonLinks, textSnippets: commonSnippets },
+    pages: pages.map((p) => ({
+      url: p.url,
+      title: p.title,
+      headings: p.headings,
+      inputs: p.inputs,
+      buttons: (p.buttons ?? []).filter((b) => !commonButtonTexts.has(b.text)),
+      links: (p.links ?? []).filter((l) => !commonLinkTexts.has(l.text)),
+      textSnippets: (p.textSnippets ?? []).filter((s) => !commonSnippetTexts.has(s)),
+    })),
+  };
+}
 
 export async function runQaTestCasesStage(
   claude: ClaudeClient,
@@ -140,13 +242,19 @@ export async function runQaTestCasesStage(
     discoveredStructure?: unknown;
   },
 ) {
-  const discoveredPages = (params.discoveredStructure as { pages?: { url: string }[] } | undefined)?.pages ?? [];
+  const discoveredPages = (params.discoveredStructure as { pages?: DiscoveredPage[] } | undefined)?.pages ?? [];
   const startingPageNote =
     discoveredPages.length > 0
-      ? `\n\nLa precondición (o la URL base, si no hay precondición) deja al navegador exactamente en: ${discoveredPages[0]!.url} — esa es la única página en la que cada uno de tus casos empieza. Si necesitas otra pantalla, tu caso debe navegar ahí primero (regla 7).`
+      ? discoveredPages.length === 1
+        ? `\n\nLa precondición (o la URL base, si no hay precondición) deja al navegador exactamente en: ${discoveredPages[0]!.url} — esa es la única página en la que cada uno de tus casos empieza. Si necesitas otra pantalla, tu caso debe navegar ahí primero (regla 7).`
+        : `\n\nLa precondición (o la URL base, si no hay precondición) deja al navegador exactamente en: ${discoveredPages[0]!.url} — ahí es donde cada uno de tus casos EMPIEZA. El sistema además navegó por su cuenta hasta ${discoveredPages.length - 1} pantalla(s) más relevante(s) para lo que describe el módulo (${discoveredPages
+            .slice(1)
+            .map((p) => p.url)
+            .join(", ")}), y su mapa funcional también está incluido abajo — probablemente ahí es donde vive la funcionalidad real a probar. Si un caso necesita esa pantalla, sus primeros pasos deben navegar ahí desde la página de inicio (regla 7), usando el selector real del link/botón que la alcanza (visible en el mapa de la página de inicio).`
       : "";
-  const structureBlock = params.discoveredStructure
-    ? `\n\nMapa funcional real detectado en la(s) página(s) del módulo (botones, links, campos y encabezados, con su selector exacto) — úsalo para que los selectores de tus pasos coincidan con lo que de verdad existe, en vez de adivinar:\n"""${JSON.stringify(params.discoveredStructure)}"""`
+  const compactStructure = discoveredPages.length > 0 ? compactDiscoveredStructure(discoveredPages) : undefined;
+  const structureBlock = compactStructure
+    ? `\n\nMapa funcional real detectado en la(s) página(s) del módulo (botones, links, campos, encabezados y textSnippets, con su selector exacto — "elementosComunesEnTodasLasPaginas" son los que se repiten igual en cada página, ej. el header; el resto de cada página es lo que tiene de único) — úsalo para que los selectores y textos de tus pasos coincidan con lo que de verdad existe, en vez de adivinar:\n"""${JSON.stringify(compactStructure)}"""`
     : "";
 
   const prompt = `Módulo a probar: "${params.moduleName}"
@@ -161,6 +269,13 @@ Descripción de lo que hay que probar:
     prompt,
     schema: QaTestCasesResultSchema,
     schemaName: "qa_test_cases",
-    maxTokens: 8000,
+    // Un mapa funcional real (varias páginas, con textSnippets) más la
+    // cobertura más amplia que ahora se pide (regla 5: 4-8 casos) genera
+    // una respuesta bastante más larga que antes — 8000 e incluso 16000 se
+    // quedaron cortos y la respuesta llegaba truncada a mitad de un string
+    // JSON (ver memoria del proyecto: nunca lowball max_tokens en etapas
+    // que generan listas). Se sube con margen amplio; compactDiscoveredStructure
+    // ya recorta la parte más pesada del lado del prompt de entrada.
+    maxTokens: 24000,
   });
 }
