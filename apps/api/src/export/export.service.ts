@@ -5,7 +5,10 @@ import { BadRequestException, Injectable, NotFoundException } from "@nestjs/comm
 import { TenantPrismaService } from "../prisma/tenant-prisma.service";
 import { buildDocx } from "./docx-builder";
 import { buildPdf } from "./pdf-builder";
+import { buildJiraCsv, buildClickupCsv } from "./csv-builder";
 import type { ExportBundle } from "./export.types";
+
+export type CsvTarget = "jira" | "clickup";
 
 const STORAGE_DIR = join(process.cwd(), "storage", "exports");
 const MIME_TYPES: Record<string, string> = {
@@ -66,6 +69,22 @@ export class ExportService {
     return this.tenant.client.documentExported.create({
       data: { projectId, type: format, fileUrl: filename },
     });
+  }
+
+  /**
+   * A diferencia de PDF/Word, el CSV se genera al vuelo y no se guarda en
+   * `documents_exported` ni en disco — es barato de reconstruir, y así no
+   * hay que tocar el enum ExportFormat (Postgres) ni el historial de
+   * documentos existente para agregar este formato nuevo.
+   */
+  async generateCsv(projectId: string, target: CsvTarget) {
+    const bundle = await this.loadBundle(projectId);
+    if (bundle.requirements.length === 0) {
+      throw new BadRequestException("Este proyecto todavía no tiene un paquete generado para exportar");
+    }
+    const buffer = target === "jira" ? buildJiraCsv(bundle) : buildClickupCsv(bundle);
+    const safeName = (bundle.project.name || "proyecto").replace(/[^a-zA-Z0-9-_ ]/g, "").trim() || "proyecto";
+    return { buffer, filename: `${safeName}-${target}.csv` };
   }
 
   async listDocuments(projectId: string) {
