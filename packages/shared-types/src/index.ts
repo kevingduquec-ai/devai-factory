@@ -28,23 +28,34 @@ export const PLAN_LABEL_ES: Record<SubscriptionPlan, string> = {
 
 /**
  * Precio de referencia en COP/mes, solo para mostrar en la UI — el precio
- * real vive en Stripe. Recalculado cuando Starter pasó a ser solo el módulo
- * "Historia de usuario" (antes incluía el análisis completo): el costo real
- * de IA por historia es de centavos de dólar (Sonnet 5, ~$0.04 USD por
- * historia, medido en generaciones reales), así que 249.000 COP/mes había
- * quedado muy por encima de lo que el plan entrega. Se bajó a 149.000 y se
- * subieron los cupos (ver PLAN_LIMITS) — sigue dejando más de 90% de margen
- * bruto de IA incluso agotando el cupo, pero es una entrada mucho más
- * atractiva que empuja a quien necesita el paquete completo a subir a Team.
- * Team se dejó igual: con ambos módulos habilitados, el peor caso (70
- * generaciones, todas de paquete completo a ~$0.44 c/u) todavía deja ~79%
- * de margen bruto de IA.
+ * real vive en Stripe (ver STRIPE_PRICE_STARTER / STRIPE_PRICE_TEAM en
+ * BillingService). Subido ~20% respecto a los 149.000 / 849.000 anteriores
+ * al incorporar QA-AI e Integraciones como beneficios incluidos en Team y
+ * Empresa (ver PLANS_WITH_QA_AUTOMATION / PLANS_WITH_INTEGRATIONS más abajo)
+ * — el margen bruto de IA seguía siendo amplio a los precios anteriores, así
+ * que el alza financia esos dos módulos sin necesidad de subir cupos.
+ * IMPORTANTE: cambiar este valor NO cambia lo que Stripe cobra — los Price
+ * de Stripe son inmutables, así que subir el precio real requiere crear un
+ * Price nuevo en Stripe y actualizar STRIPE_PRICE_STARTER/STRIPE_PRICE_TEAM
+ * en el entorno para que coincida con este número.
  */
 export const PLAN_PRICE_COP: Record<SubscriptionPlan, number | null> = {
-  starter: 149_000,
-  team: 849_000,
+  starter: 179_000,
+  team: 999_000,
   empresa: null, // venta asistida, sin precio de autoservicio
 };
+
+/**
+ * QA-AI e Integraciones con Jira/ClickUp son beneficios incluidos en Team y
+ * Empresa (antes eran add-ons parejos en los tres planes). En Starter siguen
+ * siendo add-ons aparte. "Incluido" es solo lo que el plan da derecho a
+ * pedir — la activación real sigue siendo manual, por persona, desde el
+ * panel de super-admin (User.qaAutomationEnabled / User.integrationsEnabled
+ * en org-row-controls.tsx), y ese mecanismo no cambia: un usuario en Team no
+ * queda habilitado automáticamente solo por estar en ese plan.
+ */
+export const PLANS_WITH_QA_AUTOMATION: SubscriptionPlan[] = ["team", "empresa"];
+export const PLANS_WITH_INTEGRATIONS: SubscriptionPlan[] = ["team", "empresa"];
 
 export interface PlanLimits {
   /** Proyectos nuevos que se pueden crear por mes calendario. null = ilimitado. */

@@ -1,7 +1,13 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { SubscriptionPlan, UsageStatusDto } from "@devai-factory/shared-types";
-import { PLAN_LABEL_ES, PLAN_LIMITS, PLAN_PRICE_COP } from "@devai-factory/shared-types";
+import {
+  PLAN_LABEL_ES,
+  PLAN_LIMITS,
+  PLAN_PRICE_COP,
+  PLANS_WITH_INTEGRATIONS,
+  PLANS_WITH_QA_AUTOMATION,
+} from "@devai-factory/shared-types";
 import { requireSession } from "@/lib/session";
 import { apiFetch, safeJson } from "@/lib/api";
 import { Card, CardBadge } from "@/components/ui/card";
@@ -11,16 +17,18 @@ const PLAN_ORDER: SubscriptionPlan[] = ["starter", "team", "empresa"];
 
 function planFeatures(plan: SubscriptionPlan): string[] {
   const limits = PLAN_LIMITS[plan];
-  // El add-on de integración con Jira/ClickUp no está amarrado a ningún
-  // plan — se activa por persona desde el panel de super-admin (ver
-  // User.integrationsEnabled) — pero sigue siendo un servicio del catálogo
-  // que debe verse aquí como cualquier otro, en los tres planes, para que
-  // el cliente sepa que existe y pueda pedirlo.
+  // Incluidos en Team y Empresa, add-on aparte en Starter (ver
+  // PLANS_WITH_INTEGRATIONS/PLANS_WITH_QA_AUTOMATION en shared-types). En
+  // los tres casos la activación real sigue siendo manual, por persona,
+  // desde el panel de super-admin (User.integrationsEnabled /
+  // User.qaAutomationEnabled) — "incluido" solo cambia si el cliente paga
+  // extra por pedirlo, no el mecanismo de activación.
   const integrationsAddOn = "Integración automática con Jira/ClickUp (add-on, actívalo con nuestro equipo)";
-  // Mismo patrón que el add-on anterior: activación por persona desde el
-  // panel de super-admin (User.qaAutomationEnabled), no amarrada a ningún
-  // plan — pero visible aquí como cualquier otro servicio del catálogo.
+  const integrationsIncluded = "Integración automática con Jira/ClickUp — incluida, actívala con nuestro equipo";
   const qaAutomationAddOn = "QA-AI: automatización de pruebas web con IA (add-on, actívalo con nuestro equipo)";
+  const qaAutomationIncluded = "QA-AI: automatización de pruebas web con IA — incluida, actívala con nuestro equipo";
+  const integrations = PLANS_WITH_INTEGRATIONS.includes(plan) ? integrationsIncluded : integrationsAddOn;
+  const qaAutomation = PLANS_WITH_QA_AUTOMATION.includes(plan) ? qaAutomationIncluded : qaAutomationAddOn;
 
   if (plan === "empresa") {
     return [
@@ -28,8 +36,8 @@ function planFeatures(plan: SubscriptionPlan): string[] {
       "Usuarios ilimitados",
       "Base de conocimiento privada por dominio",
       "Onboarding dedicado y SLA de soporte",
-      integrationsAddOn,
-      qaAutomationAddOn,
+      integrations,
+      qaAutomation,
       "Venta asistida — contacta a nuestro equipo",
     ];
   }
@@ -40,8 +48,8 @@ function planFeatures(plan: SubscriptionPlan): string[] {
       `${limits.maxUsers} usuario`,
       "Exportación a PDF y Word",
       "Historial ilimitado",
-      integrationsAddOn,
-      qaAutomationAddOn,
+      integrations,
+      qaAutomation,
     ];
   }
   return [
@@ -52,8 +60,8 @@ function planFeatures(plan: SubscriptionPlan): string[] {
     `${limits.maxUsers} usuarios`,
     "Exportación a PDF y Word",
     "Soporte prioritario",
-    integrationsAddOn,
-    qaAutomationAddOn,
+    integrations,
+    qaAutomation,
   ];
 }
 
