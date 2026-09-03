@@ -16,7 +16,10 @@
 :root {
   --qubit-navy: #042954;
   --qubit-navy-800: #06356b;
-  --qubit-blue-600: #0092c9;
+  /* #0092c9 (punto medio literal entre navy y turquesa) daba ~3.3:1 en
+     texto/links pequeños sobre fondo claro — por debajo del mínimo WCAG
+     4.5:1. #006c93 es la misma familia de color, más oscuro, ~5.8:1. */
+  --qubit-blue-600: #006c93;
   --qubit-blue-400: #00aeef;
   --qubit-cyan: #4dd9ff;
   --qubit-green: #80ff72;
