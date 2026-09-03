@@ -11,6 +11,8 @@ import { UpdateSetupStepsDto } from "./dto/update-setup-steps.dto";
 import { ResolveMissingDataDto } from "./dto/resolve-missing-data.dto";
 import { QA_RUN_QUEUE } from "./qa.constants";
 import type { QaRunJobData } from "./qa-run.processor";
+import { autoBuildLoginSetupSteps, runDiscovery } from "./playwright-discovery";
+import type { QaStep } from "./qa-step.types";
 
 function padCode(prefix: string, i: number) {
   return `${prefix}-${String(i + 1).padStart(3, "0")}`;
@@ -72,6 +74,25 @@ export class QaService {
     await this.assertSubscriptionActive(orgId);
     await this.assertQaAutomationEnabled(userId);
 
+    let setupSteps = dto.setupSteps;
+    // Atajo "solo con la URL": si no armaron los pasos a mano pero dieron
+    // correo+contraseña, se detecta el formulario de login solo — nunca
+    // se asume que existe, si no se encuentra se avisa en vez de guardar
+    // un módulo que después fallaría en cada corrida sin explicación.
+    if (setupSteps.length === 0 && dto.loginEmail && dto.loginPassword) {
+      const detected = await autoBuildLoginSetupSteps({
+        targetUrl: dto.targetUrl,
+        email: dto.loginEmail,
+        password: dto.loginPassword,
+      });
+      if (!detected) {
+        throw new BadRequestException(
+          "No se encontró un formulario de login reconocible en esa URL. Define la ruta de acceso manualmente con el editor de pasos.",
+        );
+      }
+      setupSteps = detected as unknown as typeof setupSteps;
+    }
+
     return this.tenant.client.qaTestModule.create({
       data: {
         orgId,
@@ -79,9 +100,32 @@ export class QaService {
         targetUrl: dto.targetUrl,
         scopeMode: (dto.scopeMode as "scoped" | "full") ?? "scoped",
         description: dto.description,
-        setupSteps: dto.setupSteps as unknown as object[],
+        setupSteps: setupSteps as unknown as object[],
         createdBy: userId,
       },
+    });
+  }
+
+  /**
+   * Fase 1: recorre el módulo (o, en Modo A, un puñado de páginas más
+   * alcanzables desde ahí) y guarda su mapa funcional real — se usa luego
+   * al generar casos, para que los selectores sean reales en vez de
+   * adivinados. Se refresca solo cuando el cliente lo pide explícitamente.
+   */
+  async discoverModule(id: string) {
+    const { userId } = this.tenant.currentUser;
+    await this.assertQaAutomationEnabled(userId);
+    const module = await this.loadModule(id);
+
+    const { pages } = await runDiscovery({
+      targetUrl: module.targetUrl,
+      setupSteps: (module.setupSteps ?? []) as unknown as QaStep[],
+      scopeMode: module.scopeMode,
+    });
+
+    return this.tenant.client.qaTestModule.update({
+      where: { id },
+      data: { discoveredStructure: { pages } as unknown as object },
     });
   }
 
@@ -149,6 +193,7 @@ export class QaService {
       targetUrl: module.targetUrl,
       description: module.description,
       hasSetupSteps: setupSteps.length > 0,
+      discoveredStructure: module.discoveredStructure ?? undefined,
     });
 
     const existingCount = await this.tenant.client.qaTestCase.count({ where: { moduleId } });

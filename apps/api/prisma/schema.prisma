@@ -641,6 +641,12 @@ model QaTestModule {
   // los pasos de un caso de prueba. Vacío en Modo A o si el módulo ya es la
   // primera pantalla (no requiere navegación previa).
   setupSteps  Json        @default("[]") @map("setup_steps")
+  // Mapa funcional detectado (Fase 1) — botones, links, campos y
+  // encabezados de la página del módulo (Modo B) o de varias páginas
+  // alcanzables desde ahí (Modo A). Se refresca solo cuando el cliente
+  // pide "Detectar estructura", nunca automáticamente — y es lo que le da
+  // a Claude selectores reales en vez de adivinados al generar casos.
+  discoveredStructure Json? @map("discovered_structure")
   createdBy   String      @map("created_by")
   createdAt   DateTime    @default(now()) @map("created_at")
   updatedAt   DateTime    @updatedAt @map("updated_at")

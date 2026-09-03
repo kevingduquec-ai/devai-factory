@@ -178,6 +178,7 @@ export function QaModuleDetail({ initialDetail }: { initialDetail: QaModuleDetai
   const router = useRouter();
   const { module, testCases, testRuns } = initialDetail;
   const [generating, setGenerating] = useState(false);
+  const [discovering, setDiscovering] = useState(false);
   const [triggering, setTriggering] = useState(false);
   const [editingSetup, setEditingSetup] = useState(false);
   const [setupSteps, setSetupSteps] = useState(module.setupSteps);
@@ -207,6 +208,21 @@ export function QaModuleDetail({ initialDetail }: { initialDetail: QaModuleDetai
       setError(err instanceof Error ? err.message : "Error inesperado");
     } finally {
       setGenerating(false);
+    }
+  }
+
+  async function onDiscover() {
+    setError(null);
+    setDiscovering(true);
+    try {
+      const res = await fetch(`/api/qa/modules/${module.id}/discover`, { method: "POST" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(extractErrorMessage(data, "No se pudo detectar la estructura"));
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Error inesperado");
+    } finally {
+      setDiscovering(false);
     }
   }
 
@@ -285,6 +301,30 @@ export function QaModuleDetail({ initialDetail }: { initialDetail: QaModuleDetai
               </li>
             ))}
           </ol>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="font-accent text-sm font-semibold">Estructura detectada</h2>
+          <Button variant="secondary" onClick={onDiscover} loading={discovering} disabled={discovering}>
+            {discovering ? "Detectando..." : module.discoveredStructure ? "Detectar de nuevo" : "Detectar estructura"}
+          </Button>
+        </div>
+        {!module.discoveredStructure ? (
+          <p className="text-sm text-muted">
+            Todavía no se ha detectado la estructura real de la página — detectarla ayuda a que la IA proponga
+            selectores exactos (botones, campos, links) en vez de adivinarlos.
+          </p>
+        ) : (
+          <ul className="space-y-1 text-sm text-muted">
+            {module.discoveredStructure.pages.map((p, i) => (
+              <li key={i}>
+                <span className="font-medium text-foreground">{p.title || p.url}</span> — {p.buttons.length} botones,{" "}
+                {p.inputs.length} campos, {p.links.length} links
+              </li>
+            ))}
+          </ul>
         )}
       </section>
 

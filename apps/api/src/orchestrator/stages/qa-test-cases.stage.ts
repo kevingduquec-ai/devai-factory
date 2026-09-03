@@ -72,7 +72,9 @@ Reglas estrictas:
    cuando aplica, un selector y un valor.
 2. Selectores: prioriza texto visible o atributos estables (data-testid,
    aria-label, role) sobre CSS genérico o posicional — un CSS frágil rompe
-   el script con el primer cambio de estilo.
+   el script con el primer cambio de estilo. Si se te da un mapa funcional
+   real de la página, usa EXACTAMENTE los selectores y textos que aparecen
+   ahí — nunca inventes un botón, campo o texto que no está en ese mapa.
 3. NUNCA inventes un dato que no tienes (una contraseña, un ID válido, un
    rango de precio de negocio). Si un paso necesita un valor que no se
    dio en la descripción, dejas value en null, pones un dataRef en
@@ -88,18 +90,40 @@ Reglas estrictas:
    alterno o negativo razonable (dato inválido, permiso denegado, campo
    vacío) cuando aplique — prioriza por severidad, no por cantidad.
 6. No repitas ni vuelvas a describir el login o la navegación de acceso —
-   esos pasos ya viven en la precondición del módulo, no en tus casos.`;
+   esos pasos ya viven en la precondición del módulo, no en tus casos.
+7. La precondición deja al navegador en UNA sola página concreta (la que
+   te digo explícitamente). Cada uno de tus casos EMPIEZA ahí — si lo que
+   vas a verificar vive en otra pantalla (por ejemplo, un link del mapa
+   funcional que lleva a otra ruta), el caso tiene que incluir, como
+   primeros pasos, el click o goto que lo lleva hasta ahí, ANTES de
+   cualquier fill o assert sobre esa pantalla. Nunca asumas que ya estás
+   en la pantalla correcta solo porque la descripción la menciona.`;
 
 export async function runQaTestCasesStage(
   claude: ClaudeClient,
-  params: { moduleName: string; targetUrl: string; description: string; hasSetupSteps: boolean },
+  params: {
+    moduleName: string;
+    targetUrl: string;
+    description: string;
+    hasSetupSteps: boolean;
+    discoveredStructure?: unknown;
+  },
 ) {
+  const discoveredPages = (params.discoveredStructure as { pages?: { url: string }[] } | undefined)?.pages ?? [];
+  const startingPageNote =
+    discoveredPages.length > 0
+      ? `\n\nLa precondición (o la URL base, si no hay precondición) deja al navegador exactamente en: ${discoveredPages[0]!.url} — esa es la única página en la que cada uno de tus casos empieza. Si necesitas otra pantalla, tu caso debe navegar ahí primero (regla 7).`
+      : "";
+  const structureBlock = params.discoveredStructure
+    ? `\n\nMapa funcional real detectado en la(s) página(s) del módulo (botones, links, campos y encabezados, con su selector exacto) — úsalo para que los selectores de tus pasos coincidan con lo que de verdad existe, en vez de adivinar:\n"""${JSON.stringify(params.discoveredStructure)}"""`
+    : "";
+
   const prompt = `Módulo a probar: "${params.moduleName}"
 URL base de la aplicación: ${params.targetUrl}
 ${params.hasSetupSteps ? "Ya existe una precondición de acceso (login + navegación) que deja al sistema listo en este módulo — no la repitas." : "Este módulo es la primera pantalla (no requiere login ni navegación previa)."}
 
 Descripción de lo que hay que probar:
-"""${params.description}"""`;
+"""${params.description}"""${startingPageNote}${structureBlock}`;
 
   return claude.generateStructured({
     system: SYSTEM_PROMPT,

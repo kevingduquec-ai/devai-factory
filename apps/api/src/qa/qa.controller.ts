@@ -40,6 +40,11 @@ export class QaController {
     return this.qaService.generateCases(id);
   }
 
+  @Post("modules/:id/discover")
+  discoverModule(@Param("id") id: string) {
+    return this.qaService.discoverModule(id);
+  }
+
   @Post("test-cases/:id/approve")
   approveCase(@Param("id") id: string) {
     return this.qaService.approveCase(id);

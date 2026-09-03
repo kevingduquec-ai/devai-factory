@@ -616,6 +616,27 @@ export interface QaStepDto {
   description: string;
 }
 
+export interface QaDiscoveredElementDto {
+  text: string;
+  selector: string;
+}
+export interface QaDiscoveredInputDto {
+  label: string;
+  selector: string;
+  type: string;
+}
+export interface QaPageStructureDto {
+  url: string;
+  title: string;
+  headings: string[];
+  buttons: QaDiscoveredElementDto[];
+  links: QaDiscoveredElementDto[];
+  inputs: QaDiscoveredInputDto[];
+}
+export interface QaDiscoveredStructureDto {
+  pages: QaPageStructureDto[];
+}
+
 export interface QaTestModuleDto {
   id: string;
   orgId: string;
@@ -624,6 +645,7 @@ export interface QaTestModuleDto {
   scopeMode: QaScopeMode;
   description: string;
   setupSteps: QaStepDto[];
+  discoveredStructure: QaDiscoveredStructureDto | null;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
