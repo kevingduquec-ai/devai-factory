@@ -5,7 +5,7 @@ import type { QaMissingDataRequest, QaTestCase } from "@prisma/client";
 import { TenantPrismaService } from "../prisma/tenant-prisma.service";
 import { ClaudeClient } from "../orchestrator/claude-client";
 import { runQaTestCasesStage } from "../orchestrator/stages/qa-test-cases.stage";
-import { encryptSecret } from "../common/crypto";
+import { encryptSecret, decryptSecret } from "../common/crypto";
 import { CreateQaModuleDto } from "./dto/create-qa-module.dto";
 import { UpdateSetupStepsDto } from "./dto/update-setup-steps.dto";
 import { ResolveMissingDataDto } from "./dto/resolve-missing-data.dto";
@@ -53,10 +53,22 @@ export class QaService {
     }
   }
 
+  /**
+   * A diferencia del vault de Jira/ClickUp (tokens de un tercero que nunca
+   * se vuelven a mostrar), esto es la propia cuenta de prueba del cliente
+   * para SU módulo — tiene que poder verla y corregirla si se equivocó al
+   * escribirla. Sigue cifrada en la base de datos (AES-256-GCM), pero se
+   * descifra aquí para devolverla a quien ya tiene permiso de ver este
+   * módulo. Solo cuando ya está resuelta — antes de eso no hay nada que
+   * mostrar.
+   */
   private sanitizeMissingData(req: QaMissingDataRequest) {
-    const { encryptedValue: _encryptedValue, businessValue, ...rest } = req;
-    // El dato de negocio SÍ se muestra (no es secreto); el cifrado nunca.
-    return { ...rest, businessValue: req.kind === "business" ? businessValue : null };
+    const { encryptedValue, businessValue, ...rest } = req;
+    let value: string | null = null;
+    if (req.status === "resolved") {
+      value = req.kind === "secret" ? (encryptedValue ? decryptSecret(encryptedValue) : null) : businessValue;
+    }
+    return { ...rest, value };
   }
 
   async listModules() {
@@ -263,10 +275,15 @@ export class QaService {
   }
 
   /**
-   * Resuelve una solicitud de dato faltante (sección 5): cifra si es
-   * secreto, guarda tal cual si es de negocio, y — si con esto el caso ya
-   * no tiene ninguna solicitud pendiente — lo regresa a "draft" (listo
-   * para que un humano lo apruebe), nunca directo a "ready" sin ese paso.
+   * Resuelve (o edita, si ya estaba resuelta) una solicitud de dato
+   * faltante (sección 5): cifra si es secreto, guarda tal cual si es de
+   * negocio, y — si con esto el caso ya no tiene ninguna solicitud
+   * pendiente — lo regresa a "draft" (listo para que un humano lo
+   * apruebe), nunca directo a "ready" sin ese paso. Editar un valor ya
+   * resuelto no reabre nada por sí solo (el caso ya pasó ese punto), pero
+   * si se corrige un dato mal escrito, la próxima corrida usa el valor
+   * nuevo — respondedAt/respondedBy se actualizan para reflejar la
+   * corrección más reciente.
    */
   async resolveMissingData(requestId: string, dto: ResolveMissingDataDto) {
     const { userId } = this.tenant.currentUser;
@@ -274,9 +291,6 @@ export class QaService {
     const request = await this.tenant.client.qaMissingDataRequest.findUnique({ where: { id: requestId } });
     if (!request) {
       throw new NotFoundException("Solicitud de dato no encontrada");
-    }
-    if (request.status === "resolved") {
-      throw new BadRequestException("Esta solicitud ya fue resuelta");
     }
 
     const updated = await this.tenant.client.qaMissingDataRequest.update({

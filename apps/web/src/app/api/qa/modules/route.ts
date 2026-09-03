@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { apiFetch } from "@/lib/api";
+import { apiFetchWithRefresh as apiFetch } from "@/lib/api";
 
 export async function GET() {
   const res = await apiFetch("/qa/modules");

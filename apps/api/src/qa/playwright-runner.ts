@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium, type Page } from "playwright";
 import type { QaStep } from "./qa-step.types";
+import { settleAfterNavigation } from "./playwright-discovery";
 
 export interface StepExecutionResult {
   description: string;
@@ -52,14 +53,19 @@ async function runStep(page: Page, step: QaStep, resolvedData: Map<string, strin
   switch (step.action) {
     case "goto":
       await page.goto(value || defaultUrl, { timeout: DEFAULT_TIMEOUT_MS });
+      // Muchas apps reales son SPA pesadas — el "load" de Playwright llega
+      // mucho antes de que el framework termine de pintar. Sin esto, el
+      // siguiente paso (típicamente un fill/click) puede correr contra una
+      // página todavía en blanco.
+      await settleAfterNavigation(page);
       return;
     case "click":
       if (!step.selector) throw new Error("El paso de tipo click no trae selector");
       await page.locator(step.selector).first().click({ timeout: DEFAULT_TIMEOUT_MS });
       // Best-effort: si el clic disparó una navegación (ej. login), le da
       // tiempo a la app a asentarse antes del siguiente paso — nunca
-      // revienta el caso si no hay navegación (timeout corto y silencioso).
-      await page.waitForLoadState("networkidle", { timeout: 4000 }).catch(() => {});
+      // revienta el caso si no hay navegación.
+      await settleAfterNavigation(page);
       return;
     case "fill":
       if (!step.selector) throw new Error("El paso de tipo fill no trae selector");
@@ -131,6 +137,16 @@ export async function executeQaCase(params: {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
     const page = await context.newPage();
     page.setDefaultTimeout(DEFAULT_TIMEOUT_MS);
+
+    // Una página nueva de Playwright empieza en about:blank — si el módulo
+    // no tiene precondición (setupSteps vacío), nada más la mueve a la URL
+    // real antes de que arranquen los pasos del caso, que (por diseño,
+    // sección 7 del prompt) NUNCA repiten la navegación asumiendo que ya
+    // están ahí. Sin este goto inicial, el primer click del caso corre
+    // contra una página en blanco y falla por "elemento no encontrado" en
+    // vez de por una razón real del sitio bajo prueba.
+    await page.goto(params.targetUrl, { timeout: DEFAULT_TIMEOUT_MS });
+    await settleAfterNavigation(page);
 
     const allSteps = [...params.setupSteps, ...params.caseSteps];
     for (const step of allSteps) {

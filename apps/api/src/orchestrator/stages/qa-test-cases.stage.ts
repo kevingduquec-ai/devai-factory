@@ -91,14 +91,36 @@ Reglas estrictas:
    vacío) cuando aplique — prioriza por severidad, no por cantidad.
 6. Si ya existe una precondición (te lo digo explícitamente), NUNCA repitas
    el login o la navegación de acceso — esos pasos ya viven ahí, no en tus
-   casos. Si NO existe precondición todavía y el mapa funcional de la
-   página de arranque muestra un campo de contraseña (un formulario de
-   login), el sistema no logró armar el acceso automáticamente — no te
-   detengas ni asumas que ya hay sesión iniciada: el caso principal debe
-   empezar con los pasos de login usando el selector real de esos campos,
-   con dataRef ("login_email"/"login_password", kind "secret") en vez de
-   un valor literal, y su missingData correspondiente pidiendo la cuenta
-   de prueba. Así el cliente responde una sola vez y el caso queda listo.
+   casos. Si NO existe precondición todavía, el sistema no logró armar el
+   acceso automáticamente — no te detengas ni asumas que ya hay sesión
+   iniciada. Hay dos variantes según lo que muestre el mapa funcional de la
+   página de arranque:
+   6a. El mapa YA muestra un campo de contraseña (el formulario está a la
+       vista): el caso principal empieza directo con los pasos de login
+       usando el selector real de esos campos.
+   6b. El mapa NO muestra ningún campo, pero SÍ un botón o link que por su
+       texto es claramente el de iniciar sesión (ej. "Iniciar sesión",
+       "Entrar", "Mi cuenta"): el formulario está detrás de ese clic (puede
+       incluso llevar a un dominio externo de un tercero, ej. un login
+       federado tipo Microsoft/Google/Okta). Tu caso principal debe empezar
+       con un click usando el selector REAL de ese botón (tal como aparece
+       en el mapa), seguido de los pasos de fill sobre selectores estándar
+       razonables ya que el mapa todavía no los conoce. Para el campo de
+       usuario usa un selector combinado que cubra las variantes más
+       comunes: 'input[type="email"], input[type="text"]:not([type="hidden"])'
+       — muchos logins federados (ej. Microsoft) usan type="text" o
+       type="email" según el proveedor, nunca asumas uno solo. Para la
+       contraseña, 'input[type="password"]' es estándar y confiable. Para
+       el botón de envío, prioriza el texto visible si el mapa no lo dio
+       (ej. 'text=Next', 'text=Siguiente', 'text=Iniciar sesión',
+       'button[type="submit"]'). Describe estos selectores como "inferido,
+       no confirmado en el mapa" en el step para que quede claro en el
+       reporte si ese paso falla. Nunca omitas el click previo asumiendo
+       que los campos ya están en pantalla.
+   En ambos casos (6a y 6b) usa dataRef ("login_email"/"login_password",
+   kind "secret") en vez de un valor literal para las credenciales, y su
+   missingData correspondiente pidiendo la cuenta de prueba. Así el cliente
+   responde una sola vez y el caso queda listo.
 7. La precondición (o, si no existe, la página de arranque) deja al
    navegador en UNA sola página concreta (la que
    te digo explícitamente). Cada uno de tus casos EMPIEZA ahí — si lo que

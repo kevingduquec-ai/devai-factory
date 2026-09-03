@@ -37,8 +37,17 @@ const RUN_STATUS_TONE: Record<string, "neutral" | "blue" | "green" | "amber" | "
   error: "amber",
 };
 
-function MissingDataForm({ request, onResolved }: { request: QaMissingDataRequestDto; onResolved: () => void }) {
-  const [value, setValue] = useState("");
+/**
+ * Un dato faltante siempre se ve y se puede copiar/pegar/editar — es la
+ * propia cuenta de prueba del cliente para su módulo, no un secreto de un
+ * tercero, así que ocultarlo con puntos solo estorba para verificar que se
+ * escribió bien. Se guarda cifrado igual, eso no cambia — solo no se
+ * esconde de quien ya tiene permiso de ver este módulo.
+ */
+function MissingDataItem({ request, onResolved }: { request: QaMissingDataRequestDto; onResolved: () => void }) {
+  const isResolved = request.status === "resolved";
+  const [editing, setEditing] = useState(!isResolved);
+  const [value, setValue] = useState(request.value ?? "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,6 +63,7 @@ function MissingDataForm({ request, onResolved }: { request: QaMissingDataReques
       });
       const data = await res.json();
       if (!res.ok) throw new Error(extractErrorMessage(data, "No se pudo guardar el dato"));
+      setEditing(false);
       onResolved();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Error inesperado");
@@ -62,25 +72,43 @@ function MissingDataForm({ request, onResolved }: { request: QaMissingDataReques
     }
   }
 
+  if (isResolved && !editing) {
+    return (
+      <div className="mt-2 flex items-center justify-between gap-2 rounded-md border border-border bg-background p-3 text-sm">
+        <div>
+          <p className="text-muted">{request.question}</p>
+          <p className="font-accent mt-0.5">{request.value}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            setValue(request.value ?? "");
+            setEditing(true);
+          }}
+          className="shrink-0 text-xs text-qubit-blue-600 underline dark:text-qubit-blue-400"
+        >
+          Editar
+        </button>
+      </div>
+    );
+  }
+
   return (
     <form onSubmit={onSubmit} className="mt-2 space-y-1.5 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm dark:border-amber-900 dark:bg-amber-950">
       <p className="text-amber-800 dark:text-amber-200">
         <strong>Dato requerido:</strong> {request.question}
       </p>
-      <p className="text-xs text-amber-700 dark:text-amber-300">
-        Formato: {request.format} · {request.kind === "secret" ? "Se guarda cifrado" : "Dato de negocio"}
-      </p>
+      <p className="text-xs text-amber-700 dark:text-amber-300">Formato: {request.format}</p>
       <div className="flex items-center gap-2">
-        <Input
-          type={request.kind === "secret" ? "password" : "text"}
-          value={value}
-          onChange={(e) => setValue(e.target.value)}
-          placeholder="Respuesta"
-          required
-        />
+        <Input type="text" value={value} onChange={(e) => setValue(e.target.value)} placeholder="Respuesta" required />
         <Button type="submit" loading={loading} disabled={loading}>
           Guardar
         </Button>
+        {isResolved && (
+          <Button type="button" variant="secondary" onClick={() => setEditing(false)} disabled={loading}>
+            Cancelar
+          </Button>
+        )}
       </div>
       {error && <p className="text-xs text-red-600">{error}</p>}
     </form>
@@ -90,7 +118,6 @@ function MissingDataForm({ request, onResolved }: { request: QaMissingDataReques
 function TestCaseRow({ testCase, onChanged }: { testCase: QaTestCaseDto; onChanged: () => void }) {
   const [approving, setApproving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const pending = testCase.missingDataRequests.filter((r) => r.status === "pending");
 
   async function onApprove() {
     setError(null);
@@ -128,8 +155,8 @@ function TestCaseRow({ testCase, onChanged }: { testCase: QaTestCaseDto; onChang
         </div>
       </div>
       {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
-      {pending.map((req) => (
-        <MissingDataForm key={req.id} request={req} onResolved={onChanged} />
+      {testCase.missingDataRequests.map((req) => (
+        <MissingDataItem key={req.id} request={req} onResolved={onChanged} />
       ))}
     </Card>
   );

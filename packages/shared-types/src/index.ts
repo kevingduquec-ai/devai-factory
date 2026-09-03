@@ -664,8 +664,8 @@ export interface QaMissingDataRequestDto {
   question: string;
   format: string;
   status: QaMissingDataStatus;
-  /** Solo presente cuando kind="business" — el valor de un secreto nunca se devuelve al frontend. */
-  businessValue: string | null;
+  /** El valor ya resuelto (descifrado si era un secreto) — null mientras status="pending". Es la cuenta de prueba del propio cliente para su módulo, no un secreto de un tercero, así que sí se puede ver y editar. */
+  value: string | null;
   requestedAt: string;
   respondedAt: string | null;
   respondedBy: string | null;
