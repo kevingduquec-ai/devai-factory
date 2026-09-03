@@ -171,7 +171,16 @@ Reglas estrictas:
      para credenciales — aplícalo también a comportamientos de la UI que
      no puedes confirmar con lo que tienes. Una pregunta honesta vale
      infinitamente más que una aserción que parece razonable pero prueba
-     algo que nunca vas a ver en pantalla.`;
+     algo que nunca vas a ver en pantalla.
+9. Un caso de "campo obligatorio vacío" casi nunca puede verificarse con
+   assert_text/wait_for_text: la mayoría de formularios usan la validación
+   NATIVA del navegador (el atributo required de HTML), que muestra un
+   globo/tooltip del propio navegador — no es texto del DOM, y ningún
+   selector puede leerlo. Para ese tipo de caso, verifica en cambio algo
+   que sí es real y observable: que la URL no cambió (assert_url con el
+   mismo fragmento de la página del formulario) o que el campo/formulario
+   sigue visible (assert_element_visible) — nunca un assert_text con el
+   mensaje de validación que "el navegador debería mostrar".`;
 
 interface DiscoveredEl {
   text: string;

@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium, type Page } from "playwright";
 import type { QaStep } from "./qa-step.types";
-import { settleAfterNavigation } from "./playwright-discovery";
+import { settleAfterNavigation, NEXT_BUTTON_PATTERN } from "./playwright-discovery";
 
 export interface StepExecutionResult {
   description: string;
@@ -69,7 +69,28 @@ async function runStep(page: Page, step: QaStep, resolvedData: Map<string, strin
       return;
     case "fill":
       if (!step.selector) throw new Error("El paso de tipo fill no trae selector");
-      await page.locator(step.selector).first().fill(value ?? "", { timeout: DEFAULT_TIMEOUT_MS });
+      try {
+        await page.locator(step.selector).first().fill(value ?? "", { timeout: DEFAULT_TIMEOUT_MS });
+      } catch (error) {
+        // Un campo de contraseña que no aparece justo después de llenar el
+        // correo suele significar un login en dos pasos (Microsoft, Google
+        // y clones) que el caso no anticipó — el mapa detectado antes de
+        // iniciar sesión nunca puede saber esto de antemano. En vez de
+        // fallar de inmediato, se intenta UNA vez el patrón real: buscar
+        // un botón "Siguiente/Next/Continuar" visible, hacerle clic, y
+        // reintentar el fill sobre la pantalla resultante. Si tampoco
+        // existe ese botón, el error original (más claro) es el que se
+        // reporta — este mecanismo nunca oculta un fallo real.
+        if (!/password/i.test(step.selector)) throw error;
+        const nextButton = page.locator(`text=/${NEXT_BUTTON_PATTERN.source}/i`).first();
+        const found = await nextButton.count().catch(() => 0);
+        if (found === 0) throw error;
+        await nextButton.click({ timeout: DEFAULT_TIMEOUT_MS }).catch(() => {
+          throw error;
+        });
+        await settleAfterNavigation(page);
+        await page.locator(step.selector).first().fill(value ?? "", { timeout: DEFAULT_TIMEOUT_MS });
+      }
       return;
     case "select":
       if (!step.selector) throw new Error("El paso de tipo select no trae selector");

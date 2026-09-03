@@ -196,7 +196,7 @@ export async function extractSameOriginLinks(page: Page, baseUrl: string, limit:
 }
 
 const LOGIN_LINK_PATTERN = /iniciar sesi[oó]n|log\s?in|sign\s?in|^entrar$|acceder|ingresar|mi cuenta|my account|acceso/i;
-const NEXT_BUTTON_PATTERN = /^siguiente$|^continuar$|^next$|^continue$|^avanzar$/i;
+export const NEXT_BUTTON_PATTERN = /^siguiente$|^continuar$|^next$|^continue$|^avanzar$/i;
 
 /**
  * Muchos logins reales (Google, Microsoft, Okta y clones) piden el correo
