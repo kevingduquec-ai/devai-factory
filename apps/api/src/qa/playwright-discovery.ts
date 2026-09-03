@@ -136,19 +136,32 @@ export async function extractSameOriginLinks(page: Page, baseUrl: string, limit:
 
 const LOGIN_LINK_PATTERN = /iniciar sesi[oó]n|log\s?in|sign\s?in|^entrar$|acceder/i;
 
+export interface AutoLoginResult {
+  /** null si no se pudo armar la precondición automática (ver `structure` para seguir de todos modos). */
+  steps: QaStep[] | null;
+  /** El mapa funcional de la última página alcanzada — se guarda igual aunque no se haya encontrado login, para que la generación de casos tenga algo real con qué trabajar en vez de nada. */
+  structure: PageStructure;
+}
+
 /**
  * Atajo "solo con la URL + credenciales": visita targetUrl, busca un
  * formulario de login, y si lo encuentra arma los 4 pasos de precondición
  * automáticamente — el usuario no tiene que abrir el editor de pasos para
- * el caso más común (un módulo detrás de un login). Devuelve null si no
- * encontró un formulario de login reconocible en esa página.
+ * el caso más común (un módulo detrás de un login). `steps` viene en null
+ * si no encontró un formulario de login reconocible — pero NUNCA se
+ * detiene ahí: sección 5 del módulo exige seguir adelante en vez de
+ * bloquear, así que igual devuelve el mapa funcional de donde terminó
+ * (que puede mostrar un formulario de login que la heurística no logró
+ * emparejar del todo, u otra pantalla) para que la generación de casos
+ * pueda razonar sobre eso y, si hace falta, pedir las credenciales como
+ * un dato faltante en vez de nunca poder avanzar.
  *
  * targetUrl casi nunca ES la página de login — normalmente es la home o la
  * URL base de la app (lo que un usuario da naturalmente). Si no hay
  * formulario de login ahí mismo, se busca un link/botón de acceso visible
  * ("Iniciar sesión", "Log in"...) y se sigue una vez antes de rendirse.
  */
-export async function autoBuildLoginSetupSteps(params: { targetUrl: string; email: string; password: string }): Promise<QaStep[] | null> {
+export async function autoBuildLoginSetupSteps(params: { targetUrl: string; email: string; password: string }): Promise<AutoLoginResult> {
   const browser = await chromium.launch({ headless: true });
   try {
     const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
@@ -166,15 +179,21 @@ export async function autoBuildLoginSetupSteps(params: { targetUrl: string; emai
         form = await detectLoginForm(page);
       }
     }
-    if (!form) return null;
+
+    const structure = await discoverPageStructure(page);
+
+    if (!form) return { steps: null, structure };
 
     const loginPageUrl = page.url();
-    return [
-      { action: "goto", value: loginPageUrl, description: "Ir a la página de acceso" },
-      { action: "fill", selector: form.emailSelector, value: params.email, description: "Escribir el correo" },
-      { action: "fill", selector: form.passwordSelector, value: params.password, description: "Escribir la contraseña" },
-      { action: "click", selector: form.submitSelector, description: "Enviar el formulario de acceso" },
-    ];
+    return {
+      steps: [
+        { action: "goto", value: loginPageUrl, description: "Ir a la página de acceso" },
+        { action: "fill", selector: form.emailSelector, value: params.email, description: "Escribir el correo" },
+        { action: "fill", selector: form.passwordSelector, value: params.password, description: "Escribir la contraseña" },
+        { action: "click", selector: form.submitSelector, description: "Enviar el formulario de acceso" },
+      ],
+      structure,
+    };
   } finally {
     await browser.close().catch(() => {});
   }

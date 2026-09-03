@@ -89,9 +89,18 @@ Reglas estrictas:
 5. Cubre primero el camino principal de negocio, y agrega al menos un caso
    alterno o negativo razonable (dato inválido, permiso denegado, campo
    vacío) cuando aplique — prioriza por severidad, no por cantidad.
-6. No repitas ni vuelvas a describir el login o la navegación de acceso —
-   esos pasos ya viven en la precondición del módulo, no en tus casos.
-7. La precondición deja al navegador en UNA sola página concreta (la que
+6. Si ya existe una precondición (te lo digo explícitamente), NUNCA repitas
+   el login o la navegación de acceso — esos pasos ya viven ahí, no en tus
+   casos. Si NO existe precondición todavía y el mapa funcional de la
+   página de arranque muestra un campo de contraseña (un formulario de
+   login), el sistema no logró armar el acceso automáticamente — no te
+   detengas ni asumas que ya hay sesión iniciada: el caso principal debe
+   empezar con los pasos de login usando el selector real de esos campos,
+   con dataRef ("login_email"/"login_password", kind "secret") en vez de
+   un valor literal, y su missingData correspondiente pidiendo la cuenta
+   de prueba. Así el cliente responde una sola vez y el caso queda listo.
+7. La precondición (o, si no existe, la página de arranque) deja al
+   navegador en UNA sola página concreta (la que
    te digo explícitamente). Cada uno de tus casos EMPIEZA ahí — si lo que
    vas a verificar vive en otra pantalla (por ejemplo, un link del mapa
    funcional que lleva a otra ruta), el caso tiene que incluir, como

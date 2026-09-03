@@ -75,22 +75,26 @@ export class QaService {
     await this.assertQaAutomationEnabled(userId);
 
     let setupSteps = dto.setupSteps;
+    let discoveredStructure: { pages: unknown[] } | undefined;
+
     // Atajo "solo con la URL": si no armaron los pasos a mano pero dieron
-    // correo+contraseña, se detecta el formulario de login solo — nunca
-    // se asume que existe, si no se encuentra se avisa en vez de guardar
-    // un módulo que después fallaría en cada corrida sin explicación.
+    // correo+contraseña, se detecta el formulario de login solo. Si no se
+    // encuentra, NUNCA se bloquea la creación (sección 5 del módulo: el
+    // sistema debe avanzar, no detenerse en seco) — se guarda igual el mapa
+    // de la última pantalla alcanzada, para que al generar casos la IA vea
+    // algo real (puede incluir el propio formulario de login) y, si hace
+    // falta autenticarse, lo pida como dato faltante en el caso en vez de
+    // dejar al cliente sin ninguna forma de avanzar.
     if (setupSteps.length === 0 && dto.loginEmail && dto.loginPassword) {
-      const detected = await autoBuildLoginSetupSteps({
+      const result = await autoBuildLoginSetupSteps({
         targetUrl: dto.targetUrl,
         email: dto.loginEmail,
         password: dto.loginPassword,
       });
-      if (!detected) {
-        throw new BadRequestException(
-          "No se encontró un formulario de login reconocible en esa URL. Define la ruta de acceso manualmente con el editor de pasos.",
-        );
+      if (result.steps) {
+        setupSteps = result.steps as unknown as typeof setupSteps;
       }
-      setupSteps = detected as unknown as typeof setupSteps;
+      discoveredStructure = { pages: [result.structure] };
     }
 
     return this.tenant.client.qaTestModule.create({
@@ -101,6 +105,7 @@ export class QaService {
         scopeMode: (dto.scopeMode as "scoped" | "full") ?? "scoped",
         description: dto.description,
         setupSteps: setupSteps as unknown as object[],
+        ...(discoveredStructure ? { discoveredStructure: discoveredStructure as unknown as object } : {}),
         createdBy: userId,
       },
     });
