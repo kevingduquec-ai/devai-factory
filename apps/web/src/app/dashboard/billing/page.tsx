@@ -11,12 +11,20 @@ const PLAN_ORDER: SubscriptionPlan[] = ["starter", "team", "empresa"];
 
 function planFeatures(plan: SubscriptionPlan): string[] {
   const limits = PLAN_LIMITS[plan];
+  // El add-on de integración con Jira/ClickUp no está amarrado a ningún
+  // plan — se activa por persona desde el panel de super-admin (ver
+  // User.integrationsEnabled) — pero sigue siendo un servicio del catálogo
+  // que debe verse aquí como cualquier otro, en los tres planes, para que
+  // el cliente sepa que existe y pueda pedirlo.
+  const integrationsAddOn = "Integración automática con Jira/ClickUp (add-on, actívalo con nuestro equipo)";
+
   if (plan === "empresa") {
     return [
       "Análisis completo y módulo de historia de usuario, ilimitados",
       "Usuarios ilimitados",
       "Base de conocimiento privada por dominio",
       "Onboarding dedicado y SLA de soporte",
+      integrationsAddOn,
       "Venta asistida — contacta a nuestro equipo",
     ];
   }
@@ -27,6 +35,7 @@ function planFeatures(plan: SubscriptionPlan): string[] {
       `${limits.maxUsers} usuario`,
       "Exportación a PDF y Word",
       "Historial ilimitado",
+      integrationsAddOn,
     ];
   }
   return [
@@ -37,6 +46,7 @@ function planFeatures(plan: SubscriptionPlan): string[] {
     `${limits.maxUsers} usuarios`,
     "Exportación a PDF y Word",
     "Soporte prioritario",
+    integrationsAddOn,
   ];
 }
 
