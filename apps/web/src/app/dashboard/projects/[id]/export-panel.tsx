@@ -80,7 +80,9 @@ export function ExportPanel({ projectId }: { projectId: string }) {
       </div>
       <p className="text-xs text-muted">
         Los archivos CSV traen las columnas listas para el importador nativo de cada herramienta (Jira: Settings →
-        System → External system import; ClickUp: Settings → Imports/Exports → Spreadsheet).
+        System → External system import; ClickUp: Settings → Imports/Exports → Spreadsheet). Usan punto y coma (;)
+        como separador para abrirse bien en Excel en español — si el asistente de importación te pregunta por el
+        delimitador, elige &quot;;&quot; (punto y coma).
       </p>
       {error && <p className="text-sm text-red-600">{error}</p>}
     </div>

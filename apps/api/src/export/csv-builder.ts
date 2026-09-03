@@ -49,16 +49,31 @@ const CLICKUP_SEVERITY_PRIORITY: Record<string, string> = {
   baja: "Low",
 };
 
+// Punto y coma, no coma: Excel abre un .csv usando el separador de lista
+// regional de Windows, no uno fijo — en español (Latinoamérica/España) ese
+// separador es ";" porque "," ya está tomada como separador decimal. Si el
+// archivo trae comas, Excel no reconoce ningún delimitador, así que NO
+// separa en columnas: mete la línea entera en una sola celda, muestra las
+// comillas como texto literal (nunca llega a interpretarlas como
+// delimitador de campo) y cada salto de línea interno de una descripción
+// se convierte en una fila nueva en lugar de quedarse dentro de la celda.
+// Todas las celdas van entre comillas de todos modos, así que un ";" que
+// aparezca dentro de un texto (como los que unen ítems de "Subtasks" o
+// "Checklist") sigue siendo válido: un separador entre comillas es solo
+// contenido, nunca se confunde con el fin de la celda.
+const DELIMITER = ";";
+
 function csvCell(value: string | number | null | undefined): string {
   const text = value == null ? "" : String(value);
   // Toda celda se envuelve en comillas — es válido en CSV y evita tener que
-  // decidir caso por caso si el contenido necesita escaparse (comas,
-  // saltos de línea y comillas son comunes en las descripciones generadas).
+  // decidir caso por caso si el contenido necesita escaparse (el propio
+  // delimitador, saltos de línea y comillas son comunes en las
+  // descripciones generadas).
   return `"${text.replace(/"/g, '""')}"`;
 }
 
 function csvRow(cells: (string | number | null | undefined)[]): string {
-  return cells.map(csvCell).join(",") + "\r\n";
+  return cells.map(csvCell).join(DELIMITER) + "\r\n";
 }
 
 function joinLines(lines: (string | null | undefined | false)[]): string {
