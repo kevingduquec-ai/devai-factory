@@ -12,6 +12,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
   }
   const currentUser = session.users.find((u) => u.id === session.currentUserId);
   const integrationsEnabled = currentUser?.integrationsEnabled ?? false;
+  const qaAutomationEnabled = currentUser?.qaAutomationEnabled ?? false;
 
   return (
     <div className="flex flex-1 flex-col">
@@ -24,7 +25,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-4">
-          <NavLinks integrationsEnabled={integrationsEnabled} />
+          <NavLinks integrationsEnabled={integrationsEnabled} qaAutomationEnabled={qaAutomationEnabled} />
           <LogoutButton />
         </div>
       </header>

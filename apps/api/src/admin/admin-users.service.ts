@@ -17,6 +17,7 @@ export class AdminUsersService {
       data: {
         ...(dto.singleStoryEnabled !== undefined ? { singleStoryEnabled: dto.singleStoryEnabled } : {}),
         ...(dto.integrationsEnabled !== undefined ? { integrationsEnabled: dto.integrationsEnabled } : {}),
+        ...(dto.qaAutomationEnabled !== undefined ? { qaAutomationEnabled: dto.qaAutomationEnabled } : {}),
       },
     });
   }

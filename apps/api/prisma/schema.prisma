@@ -151,6 +151,8 @@ model Organization {
   supportConversation SupportConversation?
   integrationConnections IntegrationConnection[]
   syncRuns      SyncRun[]
+  qaTestModules QaTestModule[]
+  qaTestRuns    QaTestRun[]
 
   @@map("organizations")
 }
@@ -189,6 +191,10 @@ model User {
   // revocar por impago), nunca un beneficio automático del plan. Ver
   // IntegrationsService.assertIntegrationsEnabled.
   integrationsEnabled Boolean @default(false) @map("integrations_enabled")
+  // Módulo add-on "QA-AI: automatización de pruebas web" — mismo patrón que
+  // integrationsEnabled: arranca desactivado, el super-admin lo activa
+  // persona por persona. Ver QaService.assertQaAutomationEnabled.
+  qaAutomationEnabled Boolean @default(false) @map("qa_automation_enabled")
   createdAt    DateTime   @default(now()) @map("created_at")
   updatedAt    DateTime   @updatedAt @map("updated_at")
 
@@ -572,4 +578,174 @@ model SyncItem {
 
   @@index([syncRunId])
   @@map("sync_items")
+}
+
+// --- Módulo QA-AI: automatización de pruebas web de caja negra ----------
+
+enum QaScopeMode {
+  scoped // Modo B: un módulo puntual, con su propia ruta de acceso (Fase 0)
+  full   // Modo A: exploración completa — reservado para el futuro, no implementado en el MVP
+}
+
+enum QaTestCaseStatus {
+  draft                 // recién generado por IA, o ya con sus datos resueltos — pendiente de aprobación humana
+  blocked_missing_data  // tiene al menos una QaMissingDataRequest sin resolver
+  ready                 // aprobado por un humano y sin datos pendientes — se puede ejecutar
+  archived
+}
+
+enum QaRunStatus {
+  in_progress
+  passed
+  failed
+  error // algo impidió correr la prueba (ej. el setup falló) — distinto de "failed", que es un assert que no se cumplió
+}
+
+enum QaStepAction {
+  goto
+  click
+  fill
+  select
+  wait_for_text
+  assert_text
+  assert_url
+  assert_element_visible
+}
+
+enum QaMissingDataKind {
+  secret   // credencial/contraseña -> va cifrada, nunca en texto plano
+  business // un ID, un rango de precio, etc. -> dato de negocio, no secreto
+}
+
+enum QaMissingDataStatus {
+  pending
+  resolved
+}
+
+// Un módulo a probar (Fase 0): la URL, el modo, y — si es Modo B — los
+// pasos de acceso (login + navegación) que dejan al sistema "en la puerta"
+// del módulo real a probar. Ese guion de acceso es la precondición
+// reutilizable de la que habla la Fase 0: se ejecuta antes de cada corrida
+// de este módulo, y si el flujo de acceso cambia, solo se edita aquí, sin
+// tocar nada de otro módulo.
+model QaTestModule {
+  id          String      @id @default(uuid())
+  orgId       String      @map("org_id")
+  name        String
+  targetUrl   String      @map("target_url")
+  scopeMode   QaScopeMode @default(scoped) @map("scope_mode")
+  // Qué se quiere probar, en texto libre — es el insumo para que Claude
+  // proponga los casos de prueba (Fase 1+2, ver qa-test-cases.stage.ts).
+  description String
+  // Pasos de acceso al módulo (Fase 0) — array de QaStep, mismo formato que
+  // los pasos de un caso de prueba. Vacío en Modo A o si el módulo ya es la
+  // primera pantalla (no requiere navegación previa).
+  setupSteps  Json        @default("[]") @map("setup_steps")
+  createdBy   String      @map("created_by")
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  organization Organization @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  testCases    QaTestCase[]
+  testRuns     QaTestRun[]
+
+  @@index([orgId])
+  @@map("qa_test_modules")
+}
+
+model QaTestCase {
+  id             String            @id @default(uuid())
+  orgId          String            @map("org_id")
+  moduleId       String            @map("module_id")
+  code           String
+  title          String
+  severity       TestCaseSeverity  @default(media)
+  // Array de QaStep: [{ action, selector?, value?, dataRef? }] — dataRef
+  // referencia el fieldKey de una QaMissingDataRequest cuando el valor
+  // todavía no se conoce (ver sección 5 del módulo).
+  steps          Json              @default("[]")
+  expectedResult String            @map("expected_result")
+  status         QaTestCaseStatus  @default(draft)
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  module              QaTestModule            @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  missingDataRequests  QaMissingDataRequest[]
+  runItems             QaTestRunItem[]
+
+  @@index([moduleId])
+  @@unique([moduleId, code])
+  @@map("qa_test_cases")
+}
+
+// El mecanismo de solicitud de datos faltantes (sección 5 del módulo): en
+// vez de inventar un valor o bloquearse en silencio, cada dato que falta
+// queda registrado aquí con su trazabilidad completa. El valor mismo nunca
+// se expone en listados — solo el metadato de la solicitud (qué se pidió,
+// para qué caso, quién y cuándo respondió).
+model QaMissingDataRequest {
+  id             String               @id @default(uuid())
+  orgId          String               @map("org_id")
+  testCaseId     String               @map("test_case_id")
+  kind           QaMissingDataKind
+  // Clave con la que un paso referencia este dato (steps[].dataRef).
+  fieldKey       String               @map("field_key")
+  question       String
+  format         String
+  status         QaMissingDataStatus  @default(pending)
+  // Solo uno de los dos se llena, según `kind`. encryptedValue nunca se
+  // devuelve al frontend (ver QaService.sanitizeMissingDataRequest).
+  encryptedValue String?              @map("encrypted_value")
+  businessValue  String?              @map("business_value")
+  requestedAt    DateTime             @default(now()) @map("requested_at")
+  respondedAt    DateTime?            @map("responded_at")
+  respondedBy    String?              @map("responded_by")
+  firstUsedRunId String?              @map("first_used_run_id")
+
+  testCase QaTestCase @relation(fields: [testCaseId], references: [id], onDelete: Cascade)
+
+  @@index([testCaseId])
+  @@index([orgId, status])
+  @@map("qa_missing_data_requests")
+}
+
+model QaTestRun {
+  id          String      @id @default(uuid())
+  orgId       String      @map("org_id")
+  moduleId    String      @map("module_id")
+  status      QaRunStatus @default(in_progress)
+  errorMessage String?    @map("error_message")
+  startedAt   DateTime    @default(now()) @map("started_at")
+  finishedAt  DateTime?   @map("finished_at")
+  triggeredBy String      @map("triggered_by")
+  // Nombre del PDF de reporte una vez generado (Fase 4) — mismo patrón de
+  // almacenamiento en disco que DocumentExported en el módulo de export.
+  reportFile  String?     @map("report_file")
+
+  organization Organization    @relation(fields: [orgId], references: [id], onDelete: Cascade)
+  module       QaTestModule    @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  items        QaTestRunItem[]
+
+  @@index([orgId, startedAt])
+  @@index([moduleId])
+  @@map("qa_test_runs")
+}
+
+model QaTestRunItem {
+  id            String      @id @default(uuid())
+  runId         String      @map("run_id")
+  testCaseId    String      @map("test_case_id")
+  status        QaRunStatus
+  errorMessage  String?     @map("error_message")
+  // Array de nombres de archivo de capturas (una por paso), guardadas en
+  // storage/qa-evidence/{runId}/ — mismo patrón que los documentos exportados.
+  screenshots   Json        @default("[]")
+  startedAt     DateTime    @default(now()) @map("started_at")
+  finishedAt    DateTime?   @map("finished_at")
+
+  run      QaTestRun  @relation(fields: [runId], references: [id], onDelete: Cascade)
+  testCase QaTestCase @relation(fields: [testCaseId], references: [id], onDelete: Cascade)
+
+  @@index([runId])
+  @@map("qa_test_run_items")
 }

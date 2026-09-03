@@ -8,4 +8,8 @@ export class UpdateUserAdminDto {
   @IsOptional()
   @IsBoolean()
   integrationsEnabled?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  qaAutomationEnabled?: boolean;
 }

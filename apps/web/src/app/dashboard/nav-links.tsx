@@ -10,15 +10,17 @@ const BASE_LINKS = [
 ];
 
 /**
- * El link de "Integraciones" solo aparece si el super-admin activó el
- * add-on para esta persona — nunca se muestra una función que no puede
- * usar (ver módulo Jira/ClickUp, sección "control de activación").
+ * Los links de "Integraciones" y "QA-AI" solo aparecen si el super-admin
+ * activó ese add-on para esta persona — nunca se muestra una función que
+ * no puede usar (mismo criterio para ambos módulos add-on).
  */
-export function NavLinks({ integrationsEnabled }: { integrationsEnabled: boolean }) {
+export function NavLinks({ integrationsEnabled, qaAutomationEnabled }: { integrationsEnabled: boolean; qaAutomationEnabled: boolean }) {
   const pathname = usePathname();
-  const LINKS = integrationsEnabled
-    ? [...BASE_LINKS, { href: "/dashboard/integrations", label: "Integraciones" }]
-    : BASE_LINKS;
+  const LINKS = [
+    ...BASE_LINKS,
+    ...(integrationsEnabled ? [{ href: "/dashboard/integrations", label: "Integraciones" }] : []),
+    ...(qaAutomationEnabled ? [{ href: "/dashboard/qa", label: "QA-AI" }] : []),
+  ];
 
   return (
     <>

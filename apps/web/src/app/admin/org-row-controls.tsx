@@ -183,3 +183,21 @@ export function IntegrationsEnabledToggle({ userId, enabled }: { userId: string;
     />
   );
 }
+
+/**
+ * Add-on "QA-AI: automatización de pruebas web" — mismo patrón que
+ * integrationsEnabled: arranca desactivado para todo el mundo, el
+ * super-admin lo enciende persona por persona.
+ */
+export function QaAutomationEnabledToggle({ userId, enabled }: { userId: string; enabled: boolean }) {
+  return (
+    <ToggleButton
+      endpoint={`/api/admin/users/${userId}`}
+      field="qaAutomationEnabled"
+      value={enabled}
+      labelOn="Activo"
+      labelOff="Inactivo"
+      activeIsGood={true}
+    />
+  );
+}

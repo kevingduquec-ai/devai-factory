@@ -111,6 +111,8 @@ export interface OrgUserDto {
   singleStoryEnabled: boolean;
   /** Add-on "Creación automática en Jira/ClickUp" — desactivado por defecto, el super-admin lo activa persona por persona. */
   integrationsEnabled: boolean;
+  /** Add-on "QA-AI: automatización de pruebas web" — mismo patrón: desactivado por defecto, activación persona por persona. */
+  qaAutomationEnabled: boolean;
   createdAt: string;
 }
 
@@ -131,6 +133,7 @@ export interface AdminOrgUserDto {
   role: OrgRole;
   singleStoryEnabled: boolean;
   integrationsEnabled: boolean;
+  qaAutomationEnabled: boolean;
 }
 
 export interface AdminOrganizationDto {
@@ -594,4 +597,102 @@ export interface SyncRunDto {
   finishedAt: string | null;
   errorMessage: string | null;
   items: SyncItemDto[];
+}
+
+// --- Módulo QA-AI: automatización de pruebas web (caja negra) ------------
+
+export type QaScopeMode = "scoped" | "full";
+export type QaStepAction = "goto" | "click" | "fill" | "select" | "wait_for_text" | "assert_text" | "assert_url" | "assert_element_visible";
+export type QaTestCaseStatus = "draft" | "blocked_missing_data" | "ready" | "archived";
+export type QaRunStatus = "in_progress" | "passed" | "failed" | "error";
+export type QaMissingDataKind = "secret" | "business";
+export type QaMissingDataStatus = "pending" | "resolved";
+
+export interface QaStepDto {
+  action: QaStepAction;
+  selector?: string | null;
+  value?: string | null;
+  dataRef?: string | null;
+  description: string;
+}
+
+export interface QaTestModuleDto {
+  id: string;
+  orgId: string;
+  name: string;
+  targetUrl: string;
+  scopeMode: QaScopeMode;
+  description: string;
+  setupSteps: QaStepDto[];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface QaTestModuleSummaryDto extends QaTestModuleDto {
+  _count: { testCases: number; testRuns: number };
+}
+
+export interface QaMissingDataRequestDto {
+  id: string;
+  orgId: string;
+  testCaseId: string;
+  kind: QaMissingDataKind;
+  fieldKey: string;
+  question: string;
+  format: string;
+  status: QaMissingDataStatus;
+  /** Solo presente cuando kind="business" — el valor de un secreto nunca se devuelve al frontend. */
+  businessValue: string | null;
+  requestedAt: string;
+  respondedAt: string | null;
+  respondedBy: string | null;
+  firstUsedRunId: string | null;
+  testCase?: { code: string; title: string; moduleId: string };
+}
+
+export interface QaTestCaseDto {
+  id: string;
+  orgId: string;
+  moduleId: string;
+  code: string;
+  title: string;
+  severity: TestCaseSeverity;
+  steps: QaStepDto[];
+  expectedResult: string;
+  status: QaTestCaseStatus;
+  createdAt: string;
+  updatedAt: string;
+  missingDataRequests: QaMissingDataRequestDto[];
+}
+
+export interface QaTestRunItemDto {
+  id: string;
+  runId: string;
+  testCaseId: string;
+  status: QaRunStatus;
+  errorMessage: string | null;
+  screenshots: string[];
+  startedAt: string;
+  finishedAt: string | null;
+  testCase: { code: string; title: string };
+}
+
+export interface QaTestRunDto {
+  id: string;
+  orgId: string;
+  moduleId: string;
+  status: QaRunStatus;
+  errorMessage: string | null;
+  startedAt: string;
+  finishedAt: string | null;
+  triggeredBy: string;
+  reportFile: string | null;
+  items: QaTestRunItemDto[];
+}
+
+export interface QaModuleDetailDto {
+  module: QaTestModuleDto;
+  testCases: QaTestCaseDto[];
+  testRuns: QaTestRunDto[];
 }

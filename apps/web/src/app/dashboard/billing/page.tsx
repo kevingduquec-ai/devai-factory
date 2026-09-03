@@ -17,6 +17,10 @@ function planFeatures(plan: SubscriptionPlan): string[] {
   // que debe verse aquí como cualquier otro, en los tres planes, para que
   // el cliente sepa que existe y pueda pedirlo.
   const integrationsAddOn = "Integración automática con Jira/ClickUp (add-on, actívalo con nuestro equipo)";
+  // Mismo patrón que el add-on anterior: activación por persona desde el
+  // panel de super-admin (User.qaAutomationEnabled), no amarrada a ningún
+  // plan — pero visible aquí como cualquier otro servicio del catálogo.
+  const qaAutomationAddOn = "QA-AI: automatización de pruebas web con IA (add-on, actívalo con nuestro equipo)";
 
   if (plan === "empresa") {
     return [
@@ -25,6 +29,7 @@ function planFeatures(plan: SubscriptionPlan): string[] {
       "Base de conocimiento privada por dominio",
       "Onboarding dedicado y SLA de soporte",
       integrationsAddOn,
+      qaAutomationAddOn,
       "Venta asistida — contacta a nuestro equipo",
     ];
   }
@@ -36,6 +41,7 @@ function planFeatures(plan: SubscriptionPlan): string[] {
       "Exportación a PDF y Word",
       "Historial ilimitado",
       integrationsAddOn,
+      qaAutomationAddOn,
     ];
   }
   return [
@@ -47,6 +53,7 @@ function planFeatures(plan: SubscriptionPlan): string[] {
     "Exportación a PDF y Word",
     "Soporte prioritario",
     integrationsAddOn,
+    qaAutomationAddOn,
   ];
 }
 

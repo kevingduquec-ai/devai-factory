@@ -45,6 +45,7 @@ export class OrganizationsService {
         status: true,
         singleStoryEnabled: true,
         integrationsEnabled: true,
+        qaAutomationEnabled: true,
         createdAt: true,
       },
       orderBy: { createdAt: "asc" },

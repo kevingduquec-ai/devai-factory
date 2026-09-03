@@ -7,6 +7,7 @@ import {
   SubscriptionActiveToggle,
   SingleStoryEnabledToggle,
   IntegrationsEnabledToggle,
+  QaAutomationEnabledToggle,
 } from "../org-row-controls";
 
 const ROLE_LABEL_ES: Record<string, string> = {
@@ -91,13 +92,14 @@ export default async function AdminPage() {
           <p className="text-sm text-muted">
             &quot;Historia de usuario&quot; está habilitado por defecto para cualquier persona, en cualquier plan
             — desactívalo aquí si necesitas restringir a alguien puntualmente. &quot;Integraciones (Jira/ClickUp)&quot;
-            es al revés: es un add-on que arranca desactivado para todo el mundo, y solo tú lo enciendes,
-            persona por persona (piloto, upventa manual, revocar por impago).
+            y &quot;QA-AI (pruebas automatizadas)&quot; son al revés: son add-ons que arrancan desactivados para
+            todo el mundo, y solo tú los enciendes, persona por persona (piloto, upventa manual, revocar por
+            impago).
           </p>
         </div>
 
         <div className="mt-4 overflow-x-auto rounded-xl border border-border bg-surface">
-          <table className="w-full min-w-[820px] text-sm">
+          <table className="w-full min-w-[960px] text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs uppercase text-muted">
                 <th className="px-4 py-3 font-medium">Usuario</th>
@@ -105,6 +107,7 @@ export default async function AdminPage() {
                 <th className="px-4 py-3 font-medium">Rol</th>
                 <th className="px-4 py-3 font-medium">Historia de usuario</th>
                 <th className="px-4 py-3 font-medium">Integraciones (Jira/ClickUp)</th>
+                <th className="px-4 py-3 font-medium">QA-AI (pruebas automatizadas)</th>
               </tr>
             </thead>
             <tbody>
@@ -121,11 +124,14 @@ export default async function AdminPage() {
                   <td className="px-4 py-3">
                     <IntegrationsEnabledToggle userId={u.id} enabled={u.integrationsEnabled} />
                   </td>
+                  <td className="px-4 py-3">
+                    <QaAutomationEnabledToggle userId={u.id} enabled={u.qaAutomationEnabled} />
+                  </td>
                 </tr>
               ))}
               {allUsers.length === 0 && (
                 <tr>
-                  <td colSpan={5} className="px-4 py-8 text-center text-muted">
+                  <td colSpan={6} className="px-4 py-8 text-center text-muted">
                     Todavía no hay usuarios registrados.
                   </td>
                 </tr>

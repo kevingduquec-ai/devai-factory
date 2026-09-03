@@ -1,0 +1,111 @@
+import { z } from "zod";
+import { ClaudeClient } from "../claude-client";
+
+const QaStepSchema = z.object({
+  action: z.enum(["goto", "click", "fill", "select", "wait_for_text", "assert_text", "assert_url", "assert_element_visible"]),
+  selector: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Selector de Playwright: preferir texto visible ('text=Iniciar sesión') o atributos estables (data-testid, aria-label) sobre CSS genérico. Requerido en click/fill/select/assert_element_visible; no aplica en goto/assert_url.",
+    ),
+  value: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Texto a escribir, URL a visitar, opción a elegir, o texto esperado — según la acción. Si el valor real no se conoce todavía (ej. una contraseña de un rol específico), deja este campo en null y usa dataRef.",
+    ),
+  dataRef: z
+    .string()
+    .nullable()
+    .optional()
+    .describe(
+      "Clave corta en snake_case (ej. 'vendedor_password') SOLO cuando value es null porque el dato no se conoce — debe aparecer también como fieldKey en missingData del mismo caso. Nunca inventes un valor de relleno.",
+    ),
+  description: z.string().describe("Qué hace este paso, en español, en una frase corta — se muestra en el reporte."),
+});
+
+const QaMissingDataItemSchema = z.object({
+  fieldKey: z.string().describe("Debe coincidir EXACTAMENTE con un dataRef usado en algún step de este mismo caso."),
+  kind: z.enum(["secret", "business"]).describe("'secret' para credenciales/contraseñas (se cifran); 'business' para datos de negocio como un ID o un rango de precio (no se cifran)."),
+  question: z.string().describe("Qué se necesita y para qué se usa, en una frase clara dirigida a quien va a responderla."),
+  format: z.string().describe("Formato esperado, ej: 'correo y contraseña de un usuario con rol vendedor', 'texto libre', 'número entre 1 y 100'."),
+});
+
+const QaTestCaseDraftSchema = z.object({
+  title: z.string().describe("Título corto y específico del caso de prueba."),
+  severity: z.enum(["alta", "media", "baja"]).describe("Criticidad de negocio si este caso fallara en producción."),
+  steps: z
+    .array(QaStepSchema)
+    .min(1)
+    .describe("Pasos DENTRO del módulo (no repitas los pasos de acceso/login — esos ya los cubre la precondición del módulo)."),
+  expectedResult: z
+    .string()
+    .describe(
+      "El criterio de éxito objetivo y verificable (un mensaje visible, un cambio de URL, un dato reflejado en pantalla) — nunca una impresión subjetiva como 'funciona bien'.",
+    ),
+  missingData: z.array(QaMissingDataItemSchema).default([]).describe("Un ítem por cada dataRef usado en steps. Vacío si el caso no necesita ningún dato desconocido."),
+});
+
+const QaTestCasesResultSchema = z.object({
+  testCases: z.array(QaTestCaseDraftSchema).min(1),
+});
+
+export type QaTestCaseDraft = z.infer<typeof QaTestCaseDraftSchema>;
+
+const SYSTEM_PROMPT = `Eres un ingeniero de QA senior especializado en pruebas de caja
+negra (black-box) sobre aplicaciones web reales — solo tienes la URL y lo
+que se ve en pantalla, nunca el código fuente.
+
+Estás en la Fase 2 (generación de casos) de un pipeline de automatización.
+Ya existe una precondición (Fase 0) que deja al navegador exactamente en la
+puerta del módulo a probar — login y navegación previa YA están resueltos
+por esa precondición. Tu trabajo es generar casos de prueba SOLO para lo
+que pasa DENTRO del módulo descrito, nunca para llegar hasta él.
+
+Reglas estrictas:
+1. Cada caso debe ser ejecutable por un script determinista (Playwright),
+   nunca ambiguo. Cada paso tiene una acción concreta (goto/click/fill/
+   select/wait_for_text/assert_text/assert_url/assert_element_visible) y,
+   cuando aplica, un selector y un valor.
+2. Selectores: prioriza texto visible o atributos estables (data-testid,
+   aria-label, role) sobre CSS genérico o posicional — un CSS frágil rompe
+   el script con el primer cambio de estilo.
+3. NUNCA inventes un dato que no tienes (una contraseña, un ID válido, un
+   rango de precio de negocio). Si un paso necesita un valor que no se
+   dio en la descripción, dejas value en null, pones un dataRef en
+   snake_case, y agregas el ítem correspondiente en missingData con una
+   pregunta clara. Esto es obligatorio — inventar un valor de relleno es
+   el peor error posible aquí, porque produce una prueba que parece
+   funcionar pero no prueba nada real.
+4. El resultado esperado (expectedResult) tiene que ser un hecho objetivo
+   y verificable por máquina: un mensaje de éxito visible, un código de
+   estado, un cambio de URL, un dato reflejado en pantalla — nunca "se ve
+   bien" o "funciona correctamente".
+5. Cubre primero el camino principal de negocio, y agrega al menos un caso
+   alterno o negativo razonable (dato inválido, permiso denegado, campo
+   vacío) cuando aplique — prioriza por severidad, no por cantidad.
+6. No repitas ni vuelvas a describir el login o la navegación de acceso —
+   esos pasos ya viven en la precondición del módulo, no en tus casos.`;
+
+export async function runQaTestCasesStage(
+  claude: ClaudeClient,
+  params: { moduleName: string; targetUrl: string; description: string; hasSetupSteps: boolean },
+) {
+  const prompt = `Módulo a probar: "${params.moduleName}"
+URL base de la aplicación: ${params.targetUrl}
+${params.hasSetupSteps ? "Ya existe una precondición de acceso (login + navegación) que deja al sistema listo en este módulo — no la repitas." : "Este módulo es la primera pantalla (no requiere login ni navegación previa)."}
+
+Descripción de lo que hay que probar:
+"""${params.description}"""`;
+
+  return claude.generateStructured({
+    system: SYSTEM_PROMPT,
+    prompt,
+    schema: QaTestCasesResultSchema,
+    schemaName: "qa_test_cases",
+    maxTokens: 8000,
+  });
+}
