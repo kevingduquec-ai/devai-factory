@@ -36,6 +36,26 @@ async function pollUntil(check: () => Promise<boolean>, timeoutMs: number): Prom
   return check();
 }
 
+/**
+ * Los selectores que escribe la IA a veces combinan dos estrategias con
+ * coma (ej. 'button[type="submit"], text=Iniciar Sesión'), pensando en un
+ * "o" — pero Playwright interpreta cualquier string sin prefijo de motor
+ * como una lista CSS pura, y "text=" no es CSS válido: revienta con
+ * "Unexpected token '=' while parsing css selector" antes de intentar nada.
+ * Playwright sí soporta "A o B" real, pero solo encadenando .or(), nunca
+ * uniendo los textos en un único selector. Este helper separa por comas de
+ * nivel superior y arma esa cadena — un selector de un solo token (el caso
+ * normal) se comporta exactamente igual que antes.
+ */
+function resolveLocator(page: Page, selector: string) {
+  const parts = selector
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return page.locator(selector);
+  return parts.slice(1).reduce((acc, part) => acc.or(page.locator(part)), page.locator(parts[0]));
+}
+
 function resolveValue(step: QaStep, resolvedData: Map<string, string>): string | undefined {
   if (step.dataRef) {
     const resolved = resolvedData.get(step.dataRef);
@@ -61,7 +81,7 @@ async function runStep(page: Page, step: QaStep, resolvedData: Map<string, strin
       return;
     case "click":
       if (!step.selector) throw new Error("El paso de tipo click no trae selector");
-      await page.locator(step.selector).first().click({ timeout: DEFAULT_TIMEOUT_MS });
+      await resolveLocator(page, step.selector).first().click({ timeout: DEFAULT_TIMEOUT_MS });
       // Best-effort: si el clic disparó una navegación (ej. login), le da
       // tiempo a la app a asentarse antes del siguiente paso — nunca
       // revienta el caso si no hay navegación.
@@ -70,7 +90,7 @@ async function runStep(page: Page, step: QaStep, resolvedData: Map<string, strin
     case "fill":
       if (!step.selector) throw new Error("El paso de tipo fill no trae selector");
       try {
-        await page.locator(step.selector).first().fill(value ?? "", { timeout: DEFAULT_TIMEOUT_MS });
+        await resolveLocator(page, step.selector).first().fill(value ?? "", { timeout: DEFAULT_TIMEOUT_MS });
       } catch (error) {
         // Un campo de contraseña que no aparece justo después de llenar el
         // correo suele significar un login en dos pasos (Microsoft, Google
@@ -89,12 +109,12 @@ async function runStep(page: Page, step: QaStep, resolvedData: Map<string, strin
           throw error;
         });
         await settleAfterNavigation(page);
-        await page.locator(step.selector).first().fill(value ?? "", { timeout: DEFAULT_TIMEOUT_MS });
+        await resolveLocator(page, step.selector).first().fill(value ?? "", { timeout: DEFAULT_TIMEOUT_MS });
       }
       return;
     case "select":
       if (!step.selector) throw new Error("El paso de tipo select no trae selector");
-      await page.locator(step.selector).first().selectOption(value ?? "", { timeout: DEFAULT_TIMEOUT_MS });
+      await resolveLocator(page, step.selector).first().selectOption(value ?? "", { timeout: DEFAULT_TIMEOUT_MS });
       return;
     case "wait_for_text":
       if (!value) throw new Error("El paso de tipo wait_for_text no trae el texto a esperar");
@@ -118,7 +138,7 @@ async function runStep(page: Page, step: QaStep, resolvedData: Map<string, strin
       if (!step.selector) throw new Error("El paso de tipo assert_element_visible no trae selector");
       const selector = step.selector;
       const visible = await pollUntil(
-        () => page.locator(selector).first().isVisible().catch(() => false),
+        () => resolveLocator(page, selector).first().isVisible().catch(() => false),
         DEFAULT_TIMEOUT_MS,
       );
       if (!visible) throw new Error(`El elemento "${step.selector}" no está visible`);

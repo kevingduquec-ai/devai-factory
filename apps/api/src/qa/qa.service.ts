@@ -80,6 +80,96 @@ function groundOrAskInstead(draft: QaTestCaseDraft, knownTexts: string[]): QaTes
   return { ...draft, steps, missingData };
 }
 
+const UNCONFIRMED_ACCESS_MARKER = "inferido, no confirmado en el mapa";
+
+/**
+ * Red de seguridad mecánica para el mismo patrón que ya causó un fallo
+ * real: un caso cuyo primer click de acceso está marcado por el propio
+ * modelo como "inferido, no confirmado en el mapa" (login detrás de un
+ * botón — regla 6b del prompt, típico de logins federados tipo Microsoft)
+ * puede terminar navegando a un dominio externo. El prompt ya instruye
+ * (regla 11) a NUNCA cerrar ese caso con un assert_url del sitio original
+ * en vez de assert_element_visible — pero un modelo no sigue una
+ * instrucción de texto el 100% de las veces (ver memoria del proyecto), y
+ * exactamente esa combinación ya produjo un caso que fallaba por una
+ * suposición equivocada sobre el dominio, no por un bug real de la
+ * aplicación. Este backstop lo corrige determinísticamente: si el caso
+ * empieza con ese click no confirmado y termina en un assert_url, lo
+ * reescribe a assert_element_visible sobre el último campo que el propio
+ * caso llenó — la aserción que sigue siendo válida sin importar a qué
+ * dominio terminó el click.
+ */
+function fixUnconfirmedUrlAssertion(draft: QaTestCaseDraft): QaTestCaseDraft {
+  const steps = draft.steps;
+  const hasUnconfirmedAccessClick = steps.some(
+    (s) => s.action === "click" && (s.description ?? "").includes(UNCONFIRMED_ACCESS_MARKER),
+  );
+  if (!hasUnconfirmedAccessClick) return draft;
+
+  const lastIndex = steps.length - 1;
+  const lastStep = steps[lastIndex];
+  if (!lastStep || lastStep.action !== "assert_url") return draft;
+
+  const lastFillStep = [...steps].reverse().find((s) => s.action === "fill" && s.selector);
+  if (!lastFillStep?.selector) return draft;
+
+  const newSteps = steps.map((s, i) => {
+    if (i !== lastIndex) return s;
+    return {
+      ...s,
+      action: "assert_element_visible" as const,
+      selector: lastFillStep.selector,
+      value: null,
+      description: `${s.description} (ajustado: el click de acceso no confirmó a qué dominio navega, así que se verifica que el campo sigue visible en vez de asumir la URL)`,
+    };
+  });
+  return { ...draft, steps: newSteps };
+}
+
+/**
+ * Red de seguridad mecánica para otro patrón que ya causó un fallo real:
+ * un caso usa un dataRef (ej. "login_email") en sus steps pero no lo
+ * declara en su PROPIO missingData, asumiendo — incorrectamente — que
+ * basta con que otro caso de la misma tanda ya lo haya pedido. En runtime
+ * cada caso resuelve sus datos de forma completamente independiente (ver
+ * qa-run.processor.ts), así que ese caso revienta con "falta el dato" en
+ * cuanto se ejecuta, aunque el cliente ya haya respondido la pregunta en
+ * el caso hermano. El prompt ya lo prohíbe explícitamente, pero no se
+ * cumple siempre — este backstop lo corrige completando, en cada caso que
+ * le falte, el mismo item de missingData que otro caso de la tanda ya
+ * definió para ese fieldKey (mismo texto de pregunta, así el cliente
+ * reconoce que es el mismo dato). Si ningún caso de la tanda lo definió
+ * en absoluto, genera una pregunta genérica en vez de dejar el caso roto.
+ */
+function fixOrphanedDataRefs(drafts: QaTestCaseDraft[]): QaTestCaseDraft[] {
+  const definitionByKey = new Map<string, QaTestCaseDraft["missingData"][number]>();
+  for (const draft of drafts) {
+    for (const item of draft.missingData) {
+      if (!definitionByKey.has(item.fieldKey)) definitionByKey.set(item.fieldKey, item);
+    }
+  }
+
+  return drafts.map((draft) => {
+    const declaredKeys = new Set(draft.missingData.map((m) => m.fieldKey));
+    const usedKeys = new Set(draft.steps.map((s) => s.dataRef).filter((k): k is string => Boolean(k)));
+    const orphanedKeys = [...usedKeys].filter((k) => !declaredKeys.has(k));
+    if (orphanedKeys.length === 0) return draft;
+
+    const backfilled = orphanedKeys.map((key) => {
+      const borrowed = definitionByKey.get(key);
+      if (borrowed) return borrowed;
+      const looksSecret = /password|contrase|secret|clave/i.test(key);
+      return {
+        fieldKey: key,
+        kind: (looksSecret ? "secret" : "business") as "secret" | "business",
+        question: `Falta un dato para completar este caso de prueba (clave interna: "${key}"). ¿Cuál es el valor correcto?`,
+        format: "texto libre",
+      };
+    });
+    return { ...draft, missingData: [...draft.missingData, ...backfilled] };
+  });
+}
+
 function runJobId(runId: string) {
   return `qa-run-${runId}`;
 }
@@ -284,18 +374,25 @@ export class QaService {
     const module = await this.loadModule(moduleId);
 
     const setupSteps = Array.isArray(module.setupSteps) ? (module.setupSteps as unknown[]) : [];
+    const existingCases = await this.tenant.client.qaTestCase.findMany({
+      where: { moduleId },
+      select: { title: true },
+    });
     const result = await runQaTestCasesStage(this.claude, {
       moduleName: module.name,
       targetUrl: module.targetUrl,
       description: module.description,
       hasSetupSteps: setupSteps.length > 0,
       discoveredStructure: module.discoveredStructure ?? undefined,
+      existingCaseTitles: existingCases.map((c) => c.title),
     });
 
-    const existingCount = await this.tenant.client.qaTestCase.count({ where: { moduleId } });
+    const existingCount = existingCases.length;
     const created: QaTestCase[] = [];
     const knownTexts = collectKnownTexts(module.discoveredStructure);
-    const groundedDrafts = result.data.testCases.map((draft) => groundOrAskInstead(draft, knownTexts));
+    const groundedDrafts = fixOrphanedDataRefs(
+      result.data.testCases.map((draft) => groundOrAskInstead(draft, knownTexts)).map(fixUnconfirmedUrlAssertion),
+    );
 
     await this.tenant.client.$transaction(async (tx) => {
       for (const [i, draft] of groundedDrafts.entries()) {

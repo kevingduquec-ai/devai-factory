@@ -8,7 +8,7 @@ const QaStepSchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "Selector de Playwright: preferir texto visible ('text=Iniciar sesión') o atributos estables (data-testid, aria-label) sobre CSS genérico. Requerido en click/fill/select/assert_element_visible; no aplica en goto/assert_url.",
+      "Selector de Playwright: preferir texto visible ('text=Iniciar sesión') o atributos estables (data-testid, aria-label) sobre CSS genérico. Si no hay certeza sobre cuál de dos selectores es el correcto, se pueden combinar separados por coma (ej. 'input[type=\"email\"], input[type=\"text\"]') — el runtime los prueba en orden como alternativas reales, cada una puede ser CSS o 'text=...' sin restricción, no como una lista CSS literal. Requerido en click/fill/select/assert_element_visible; no aplica en goto/assert_url.",
     ),
   value: z
     .string()
@@ -22,7 +22,7 @@ const QaStepSchema = z.object({
     .nullable()
     .optional()
     .describe(
-      "Clave corta en snake_case (ej. 'vendedor_password') SOLO cuando value es null porque el dato no se conoce — debe aparecer también como fieldKey en missingData del mismo caso. Nunca inventes un valor de relleno.",
+      "Clave corta en snake_case (ej. 'vendedor_password') SOLO cuando value es null porque el dato no se conoce — debe aparecer también como fieldKey en missingData de ESTE MISMO caso, sin excepción, incluso si otro caso de esta misma lista ya pide un dato con el mismo nombre: los casos se ejecutan de forma completamente independiente, cada uno con su propia respuesta resuelta, y un dataRef sin su missingData en el caso que lo usa hace que ese caso falle en tiempo de ejecución con 'falta el dato'. Nunca inventes un valor de relleno.",
     ),
   description: z.string().describe("Qué hace este paso, en español, en una frase corta — se muestra en el reporte."),
 });
@@ -50,7 +50,11 @@ const QaTestCaseDraftSchema = z.object({
 });
 
 const QaTestCasesResultSchema = z.object({
-  testCases: z.array(QaTestCaseDraftSchema).min(1),
+  // Sin mínimo a propósito: cuando ya existen casos de una corrida
+  // anterior (ver existingCaseTitles), una lista vacía es la respuesta
+  // correcta si el mapa no da para nada genuinamente nuevo — exigir al
+  // menos 1 empujaría al modelo a inventar un duplicado disfrazado.
+  testCases: z.array(QaTestCaseDraftSchema),
 });
 
 export type QaTestCaseDraft = z.infer<typeof QaTestCaseDraftSchema>;
@@ -98,7 +102,16 @@ Reglas estrictas:
    Como referencia, un módulo con contenido real normalmente da para 4 a 8
    casos — menos que eso casi siempre significa que falta explorar el mapa,
    no que el módulo sea simple. Prioriza por severidad al ordenar, nunca
-   para recortar cobertura real.
+   para recortar cobertura real. Esa referencia NUNCA es una cuota que
+   rellenar: si el mapa es genuinamente angosto (ej. una sola pantalla con
+   un botón y sin formulario visible), 3 o 4 casos distintos y reales
+   valen más que forzar 8. Antes de entregar la lista, revísala: dos casos
+   son el MISMO caso disfrazado si prueban la misma acción de usuario con
+   el mismo resultado, aunque el texto del nombre, la severidad o el
+   fieldKey del missingData sean distintos (ej. "login exitoso" con
+   dataRef 'login_success_indicator' y otro "login exitoso" casi idéntico
+   con dataRef 'login_success_url' son EL MISMO caso — combínalos en uno
+   solo). Elimina o fusiona cualquier par así antes de responder.
 6. Si ya existe una precondición (te lo digo explícitamente), NUNCA repitas
    el login o la navegación de acceso — esos pasos ya viven ahí, no en tus
    casos. Si NO existe precondición todavía, el sistema no logró armar el
@@ -127,6 +140,30 @@ Reglas estrictas:
        no confirmado en el mapa" en el step para que quede claro en el
        reporte si ese paso falla. Nunca omitas el click previo asumiendo
        que los campos ya están en pantalla.
+       IMPORTANTE sobre logins federados en 6b: la mayoría (Microsoft,
+       Google, Okta y clones) muestran el correo/usuario en UNA pantalla y
+       la contraseña en OTRA pantalla posterior (tras un botón intermedio
+       tipo "Next"/"Siguiente") — no un formulario combinado. El runtime ya
+       maneja esa transición automáticamente cuando el fill de contraseña
+       falla justo después de llenar el correo, así que escribe tus pasos
+       como si fuera un solo formulario (fill correo, fill contraseña,
+       click enviar) — no necesitas modelar el click intermedio tú mismo.
+       Pero SÍ ten en cuenta esto al escribir el resultado esperado: (a) un
+       caso que solo busca confirmar "el click revela el formulario de
+       login" debe verificar que aparece el CAMPO DE CORREO/USUARIO — no el
+       de contraseña, porque no puedes saber si aparecen juntos o en
+       pantallas separadas; (b) para un caso de "credenciales inválidas",
+       si vas a usar un correo INVENTADO que no corresponde a ninguna
+       cuenta real, ese proveedor externo puede rechazarlo en la PRIMERA
+       pantalla (antes de siquiera mostrar el campo de contraseña) — eso es
+       válido pero significa que nunca vas a poder confirmar de antemano
+       si el flujo llega a la pantalla de contraseña. Evita esa
+       incertidumbre pidiendo en cambio, vía dataRef y su missingData
+       ("¿cuál es una cuenta de prueba VÁLIDA/registrada, pero con la que
+       vamos a usar una contraseña incorrecta a propósito?"), un correo que
+       sí exista — así el caso prueba contraseña incorrecta de forma
+       confiable, en vez de una combinación con un resultado que ni tú ni
+       el mapa pueden anticipar.
    En ambos casos (6a y 6b) usa dataRef ("login_email"/"login_password",
    kind "secret") en vez de un valor literal para las credenciales, y su
    missingData correspondiente pidiendo la cuenta de prueba. Así el cliente
@@ -180,7 +217,42 @@ Reglas estrictas:
    que sí es real y observable: que la URL no cambió (assert_url con el
    mismo fragmento de la página del formulario) o que el campo/formulario
    sigue visible (assert_element_visible) — nunca un assert_text con el
-   mensaje de validación que "el navegador debería mostrar".`;
+   mensaje de validación que "el navegador debería mostrar".
+10. Un caso que prueba "el formulario NO avanza si dejo X vacío/inválido"
+    termina sus pasos de interacción justo en el click/submit que dispara
+    esa validación — nunca sigas llenando o haciendo click en campos que
+    solo existirían SI esa validación hubiera pasado. Esto es crítico en
+    logins de dos pasos (correo → botón Siguiente → contraseña, típico de
+    Microsoft/Google y clones): si el caso deja el correo vacío a propósito,
+    el campo de contraseña nunca aparece en pantalla — un paso de tipo fill
+    sobre ese campo no es "un paso más", es un error de diseño del caso que
+    va a fallar por timeout sin que exista ningún bug real en la
+    aplicación. La secuencia correcta es: completar (o dejar vacío,
+    según lo que el caso prueba) solo el campo bajo prueba, click en el
+    botón de envío/siguiente, y verificar ahí mismo con assert_url o
+    assert_element_visible (ver regla 9) — nunca avanzar a un paso
+    posterior del flujo.
+11. Cuando el botón de acceso (regla 6b) navega a un dominio externo
+    CONFIRMADO por el mapa (login federado tipo Microsoft/Google/Okta), esa
+    navegación YA ocurrió desde el primer click — ningún paso posterior,
+    sea cual sea el caso, puede esperar seguir en la URL del sitio
+    original. Verifica en cambio que la URL SÍ contiene el dominio/ruta del
+    proveedor externo (si el mapa lo mostró) o usa assert_element_visible
+    sobre el campo que sigue en pantalla.
+    Y en el caso más común — regla 6b sin que el mapa confirme a dónde
+    lleva el click, que es la situación por defecto — NO sabes si el
+    formulario aparece en el mismo dominio o si navega a uno externo, así
+    que cualquier aserción sobre la URL después de ese click es una
+    apuesta: si adivinas mal (como pasó en un caso real: se asumió que el
+    login era interno y el sitio en realidad federa a Microsoft, así que
+    la URL real después del click nunca vuelve a contener la ruta
+    original), el caso reporta un fallo que no es un bug de la aplicación,
+    sino un error de tu propia suposición. Para estos casos (6b sin
+    confirmar), en cualquier caso que verifique que el formulario NO avanza
+    (campo vacío, credenciales inválidas, etc.), usa SIEMPRE
+    assert_element_visible sobre el campo o botón que sigue en pantalla —
+    NUNCA assert_url — porque esa aserción es válida sin importar si el
+    login terminó siendo interno o federado.`;
 
 interface DiscoveredEl {
   text: string;
@@ -249,6 +321,7 @@ export async function runQaTestCasesStage(
     description: string;
     hasSetupSteps: boolean;
     discoveredStructure?: unknown;
+    existingCaseTitles?: string[];
   },
 ) {
   const discoveredPages = (params.discoveredStructure as { pages?: DiscoveredPage[] } | undefined)?.pages ?? [];
@@ -266,12 +339,17 @@ export async function runQaTestCasesStage(
     ? `\n\nMapa funcional real detectado en la(s) página(s) del módulo (botones, links, campos, encabezados y textSnippets, con su selector exacto — "elementosComunesEnTodasLasPaginas" son los que se repiten igual en cada página, ej. el header; el resto de cada página es lo que tiene de único) — úsalo para que los selectores y textos de tus pasos coincidan con lo que de verdad existe, en vez de adivinar:\n"""${JSON.stringify(compactStructure)}"""`
     : "";
 
+  const existingCasesBlock =
+    params.existingCaseTitles && params.existingCaseTitles.length > 0
+      ? `\n\nEste módulo YA tiene estos casos generados en una corrida anterior — NO los repitas ni generes una variante casi idéntica de ninguno (mismo título, mismo escenario con severidad o nombre distinto, o el mismo dato pedido con otra redacción). Genera SOLO casos que cubran un escenario genuinamente distinto de todos estos:\n${params.existingCaseTitles.map((t) => `- ${t}`).join("\n")}\nSi el mapa no da para casos realmente nuevos más allá de estos, devuelve una lista vacía en vez de duplicar.`
+      : "";
+
   const prompt = `Módulo a probar: "${params.moduleName}"
 URL base de la aplicación: ${params.targetUrl}
 ${params.hasSetupSteps ? "Ya existe una precondición de acceso (login + navegación) que deja al sistema listo en este módulo — no la repitas." : "Este módulo es la primera pantalla (no requiere login ni navegación previa)."}
 
 Descripción de lo que hay que probar:
-"""${params.description}"""${startingPageNote}${structureBlock}`;
+"""${params.description}"""${startingPageNote}${structureBlock}${existingCasesBlock}`;
 
   return claude.generateStructured({
     system: SYSTEM_PROMPT,
