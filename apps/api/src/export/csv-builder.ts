@@ -116,111 +116,29 @@ function sanitizeLabel(value: string): string {
   return value.trim().replace(/\s+/g, "-");
 }
 
-function findParentStory(bundle: ExportBundle, testCase: ExportBundle["testCases"][number]) {
-  return bundle.stories.find((s) => s.acceptanceCriteria.some((ac) => ac.id === testCase.acceptanceCriteriaId));
+function byCode<T extends { code: string }>(a: T, b: T): number {
+  return a.code.localeCompare(b.code);
 }
 
-/** Estructura exacta pedida: Summary,Issue Type,Description,Epic Link,Priority,Labels,Story Points,Assignee,Reporter,Components,Fix Version */
-export function buildJiraCsv(bundle: ExportBundle): Buffer {
-  const header = csvRow([
-    "Summary",
-    "Issue Type",
-    "Description",
-    "Epic Link",
-    "Priority",
-    "Labels",
-    "Story Points",
-    "Assignee",
-    "Reporter",
-    "Components",
-    "Fix Version",
-  ]);
-
-  const rows: string[] = [];
-
-  for (const epic of bundle.requirements) {
-    rows.push(
-      csvRow([
-        epic.title,
-        "Épica",
-        epicDescriptionText(epic),
-        "",
-        JIRA_PRIORITY[epic.priority] ?? "",
-        sanitizeLabel(epic.type),
-        "",
-        "",
-        "",
-        "",
-        "",
-      ]),
-    );
-  }
-
-  const requirementById = new Map(bundle.requirements.map((r) => [r.id, r]));
-  for (const story of bundle.stories) {
-    const epic = requirementById.get(story.requirementId);
-    rows.push(
-      csvRow([
-        story.title,
-        "Historia",
-        storyDescriptionText(story),
-        // El importador CSV clásico de Jira enlaza una historia a su épica
-        // comparando este valor contra el campo "Epic Name" de la fila de
-        // la épica — como Épica y Historia comparan por texto, usamos el
-        // mismo título de la épica en ambas filas para que el mapeo
-        // funcione al importar (columna "Epic Link" en el asistente).
-        epic?.title ?? "",
-        story.priority && JIRA_PRIORITY[story.priority] ? JIRA_PRIORITY[story.priority] : "",
-        story.priority ? sanitizeLabel(story.priority) : "",
-        story.storyPoints ?? "",
-        "",
-        "",
-        "",
-        "",
-      ]),
-    );
-  }
-
-  for (const testCase of bundle.testCases) {
-    const parentStory = findParentStory(bundle, testCase);
-    rows.push(
-      csvRow([
-        testCase.title,
-        "Subtarea",
-        testCaseDescriptionText(testCase, parentStory),
-        "",
-        JIRA_SEVERITY_PRIORITY[testCase.severity] ?? "",
-        sanitizeLabel(testCase.type),
-        "",
-        "",
-        "",
-        "",
-        "",
-      ]),
-    );
-  }
-
-  return Buffer.from("﻿" + header + rows.join(""), "utf8");
+interface EpicGroup {
+  epic: ExportBundle["requirements"][number];
+  stories: {
+    story: ExportBundle["stories"][number];
+    testCases: ExportBundle["testCases"];
+  }[];
 }
 
-/** Estructura exacta pedida: Task Name,Status,Priority,Due Date,Start Date,Assignee,Description,Subtasks,Tags,Time Estimate,Checklist,Task Type */
-export function buildClickupCsv(bundle: ExportBundle): Buffer {
-  const header = csvRow([
-    "Task Name",
-    "Status",
-    "Priority",
-    "Due Date",
-    "Start Date",
-    "Assignee",
-    "Description",
-    "Subtasks",
-    "Tags",
-    "Time Estimate",
-    "Checklist",
-    "Task Type",
-  ]);
-
-  const rows: string[] = [];
+/**
+ * Agrupa épica → sus historias → los casos de prueba de cada historia, y
+ * ordena cada nivel por código (REQ-001, HU-001, CP-001...) — así, al
+ * recorrer el árbol para armar las filas, cada épica queda seguida
+ * inmediatamente de sus propias historias y cada historia de sus propios
+ * casos, en vez de tres bloques separados (todas las épicas, luego todas
+ * las historias, luego todos los casos) que obligan a saltar de un lado a
+ * otro del archivo para ver qué pertenece a qué. Es la misma jerarquía que
+ * ya se ve en la vista de trazabilidad de Qubit.
+ */
+function buildHierarchy(bundle: ExportBundle): EpicGroup[] {
   const storiesByEpic = new Map<string, ExportBundle["stories"]>();
   for (const story of bundle.stories) {
     const list = storiesByEpic.get(story.requirementId) ?? [];
@@ -236,10 +154,140 @@ export function buildClickupCsv(bundle: ExportBundle): Buffer {
     testCasesByStory.set(parentStory.id, list);
   }
 
-  for (const epic of bundle.requirements) {
-    const childStories = storiesByEpic.get(epic.id) ?? [];
+  return [...bundle.requirements]
+    .sort(byCode)
+    .map((epic) => ({
+      epic,
+      stories: (storiesByEpic.get(epic.id) ?? [])
+        .sort(byCode)
+        .map((story) => ({
+          story,
+          testCases: (testCasesByStory.get(story.id) ?? []).sort(byCode),
+        })),
+    }));
+}
+
+function findParentStory(bundle: ExportBundle, testCase: ExportBundle["testCases"][number]) {
+  return bundle.stories.find((s) => s.acceptanceCriteria.some((ac) => ac.id === testCase.acceptanceCriteriaId));
+}
+
+/**
+ * "Código" es la única columna que se agrega a la estructura pedida — va
+ * primera, a propósito, para que sea obvio que no forma parte del
+ * mapeo de Jira (durante la importación se deja sin mapear/se ignora) y
+ * solo sirve para que quien revisa el archivo antes de subirlo ubique cada
+ * fila contra lo que ya ve en Qubit (mismo código REQ-/HU-/CP- que en la
+ * vista de trazabilidad), y como referencia alterna a "Epic Link" si dos
+ * épicas llegaran a compartir título.
+ */
+export function buildJiraCsv(bundle: ExportBundle): Buffer {
+  const header = csvRow([
+    "Código",
+    "Summary",
+    "Issue Type",
+    "Description",
+    "Epic Link",
+    "Priority",
+    "Labels",
+    "Story Points",
+    "Assignee",
+    "Reporter",
+    "Components",
+    "Fix Version",
+  ]);
+
+  const rows: string[] = [];
+
+  for (const { epic, stories } of buildHierarchy(bundle)) {
     rows.push(
       csvRow([
+        epic.code,
+        epic.title,
+        "Épica",
+        epicDescriptionText(epic),
+        "",
+        JIRA_PRIORITY[epic.priority] ?? "",
+        sanitizeLabel(epic.type),
+        "",
+        "",
+        "",
+        "",
+        "",
+      ]),
+    );
+
+    for (const { story, testCases } of stories) {
+      rows.push(
+        csvRow([
+          story.code,
+          story.title,
+          "Historia",
+          storyDescriptionText(story),
+          // El importador CSV clásico de Jira enlaza una historia a su
+          // épica comparando este valor contra el campo "Epic Name" de la
+          // fila de la épica — como Épica y Historia comparan por texto,
+          // usamos el mismo título de la épica en ambas filas para que el
+          // mapeo funcione al importar (columna "Epic Link" en el
+          // asistente).
+          epic.title,
+          story.priority && JIRA_PRIORITY[story.priority] ? JIRA_PRIORITY[story.priority] : "",
+          story.priority ? sanitizeLabel(story.priority) : "",
+          story.storyPoints ?? "",
+          "",
+          "",
+          "",
+          "",
+        ]),
+      );
+
+      for (const testCase of testCases) {
+        rows.push(
+          csvRow([
+            testCase.code,
+            testCase.title,
+            "Subtarea",
+            testCaseDescriptionText(testCase, story),
+            "",
+            JIRA_SEVERITY_PRIORITY[testCase.severity] ?? "",
+            sanitizeLabel(testCase.type),
+            "",
+            "",
+            "",
+            "",
+            "",
+          ]),
+        );
+      }
+    }
+  }
+
+  return Buffer.from("﻿" + header + rows.join(""), "utf8");
+}
+
+/** "Código" agregado como primera columna — mismo motivo que en el CSV de Jira, ver comentario ahí. */
+export function buildClickupCsv(bundle: ExportBundle): Buffer {
+  const header = csvRow([
+    "Código",
+    "Task Name",
+    "Status",
+    "Priority",
+    "Due Date",
+    "Start Date",
+    "Assignee",
+    "Description",
+    "Subtasks",
+    "Tags",
+    "Time Estimate",
+    "Checklist",
+    "Task Type",
+  ]);
+
+  const rows: string[] = [];
+
+  for (const { epic, stories } of buildHierarchy(bundle)) {
+    rows.push(
+      csvRow([
+        epic.code,
         epic.title,
         "",
         CLICKUP_PRIORITY[epic.priority] ?? "",
@@ -251,56 +299,58 @@ export function buildClickupCsv(bundle: ExportBundle): Buffer {
         // importador de ClickUp no arma jerarquías automáticamente desde
         // una columna de texto, así que esto queda como guía para quien
         // hace el mapeo manual durante la importación.
-        childStories.map((s) => s.title).join("; "),
+        stories.map(({ story }) => story.title).join("; "),
         sanitizeLabel(epic.type),
         "",
         "",
         "Épica",
       ]),
     );
-  }
 
-  for (const story of bundle.stories) {
-    const childTestCases = testCasesByStory.get(story.id) ?? [];
-    rows.push(
-      csvRow([
-        story.title,
-        "",
-        story.priority && CLICKUP_PRIORITY[story.priority] ? CLICKUP_PRIORITY[story.priority] : "",
-        "",
-        "",
-        "",
-        storyDescriptionText(story),
-        childTestCases.map((tc) => tc.title).join("; "),
-        story.priority ? sanitizeLabel(story.priority) : "",
-        "",
-        // Los criterios de aceptación como ítems de checklist — encajan
-        // literalmente con lo que la columna "Checklist" espera al mapear.
-        story.acceptanceCriteria.map((ac) => `${ac.scenarioName || "Escenario"}: dado ${ac.given}, cuando ${ac.when}, entonces ${ac.then}`).join("; "),
-        "Historia",
-      ]),
-    );
-  }
+    for (const { story, testCases } of stories) {
+      rows.push(
+        csvRow([
+          story.code,
+          story.title,
+          "",
+          story.priority && CLICKUP_PRIORITY[story.priority] ? CLICKUP_PRIORITY[story.priority] : "",
+          "",
+          "",
+          "",
+          storyDescriptionText(story),
+          testCases.map((tc) => tc.title).join("; "),
+          story.priority ? sanitizeLabel(story.priority) : "",
+          "",
+          // Los criterios de aceptación como ítems de checklist — encajan
+          // literalmente con lo que la columna "Checklist" espera al mapear.
+          story.acceptanceCriteria
+            .map((ac) => `${ac.scenarioName || "Escenario"}: dado ${ac.given}, cuando ${ac.when}, entonces ${ac.then}`)
+            .join("; "),
+          "Historia",
+        ]),
+      );
 
-  for (const testCase of bundle.testCases) {
-    const parentStory = findParentStory(bundle, testCase);
-    const steps = Array.isArray(testCase.steps) ? (testCase.steps as unknown as string[]) : [];
-    rows.push(
-      csvRow([
-        testCase.title,
-        "",
-        CLICKUP_SEVERITY_PRIORITY[testCase.severity] ?? "",
-        "",
-        "",
-        "",
-        testCaseDescriptionText(testCase, parentStory),
-        "",
-        sanitizeLabel(testCase.type),
-        "",
-        steps.map((s, i) => `${i + 1}. ${s}`).join("; "),
-        "Caso de Prueba",
-      ]),
-    );
+      for (const testCase of testCases) {
+        const steps = Array.isArray(testCase.steps) ? (testCase.steps as unknown as string[]) : [];
+        rows.push(
+          csvRow([
+            testCase.code,
+            testCase.title,
+            "",
+            CLICKUP_SEVERITY_PRIORITY[testCase.severity] ?? "",
+            "",
+            "",
+            "",
+            testCaseDescriptionText(testCase, story),
+            "",
+            sanitizeLabel(testCase.type),
+            "",
+            steps.map((s, i) => `${i + 1}. ${s}`).join("; "),
+            "Caso de Prueba",
+          ]),
+        );
+      }
+    }
   }
 
   return Buffer.from("﻿" + header + rows.join(""), "utf8");
