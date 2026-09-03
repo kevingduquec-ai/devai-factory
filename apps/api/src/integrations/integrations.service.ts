@@ -5,7 +5,7 @@ import type { IntegrationConnection } from "@prisma/client";
 import { TenantPrismaService } from "../prisma/tenant-prisma.service";
 import { encryptSecret, decryptSecret } from "../common/crypto";
 import { getProviderAdapter, ProviderAuthError, ProviderRequestError } from "./providers";
-import type { ProviderCredentials } from "./providers/provider.types";
+import type { DiscoveredStructure, IntegrationProviderAdapter, ProviderCredentials } from "./providers/provider.types";
 import { ConnectIntegrationDto } from "./dto/connect-integration.dto";
 import { SelectTargetDto } from "./dto/select-target.dto";
 import { TriggerSyncDto } from "./dto/trigger-sync.dto";
@@ -59,6 +59,29 @@ export class IntegrationsService {
     };
   }
 
+  /**
+   * Cuando la cuenta del cliente no tiene ningún proyecto/lista todavía,
+   * en vez de dejarlo con un selector vacío se crea automáticamente uno
+   * nuevo — nunca toca nada existente, solo aparece como una opción más en
+   * el selector (ver IntegrationProviderAdapter.createDefaultTarget). Si la
+   * creación automática falla (permisos, plan del cliente, etc.) se
+   * degrada con gracia: el cliente simplemente ve el selector vacío, igual
+   * que antes de este comportamiento.
+   */
+  private async ensureAtLeastOneTarget(
+    adapter: IntegrationProviderAdapter,
+    creds: ProviderCredentials,
+    structure: DiscoveredStructure,
+  ): Promise<DiscoveredStructure> {
+    if (structure.targets.length > 0) return structure;
+    try {
+      const created = await adapter.createDefaultTarget(creds);
+      return { ...structure, targets: [created] };
+    } catch {
+      return structure;
+    }
+  }
+
   private friendlyProviderError(error: unknown): never {
     if (error instanceof ProviderAuthError) {
       throw new BadRequestException(`No se pudo autenticar con las credenciales dadas: ${error.message}`);
@@ -98,7 +121,8 @@ export class IntegrationsService {
 
     try {
       await adapter.testConnection(creds);
-      const structure = await adapter.discoverStructure(creds);
+      const discovered = await adapter.discoverStructure(creds);
+      const structure = await this.ensureAtLeastOneTarget(adapter, creds, discovered);
 
       const connection = await this.tenant.client.integrationConnection.create({
         data: {
@@ -135,7 +159,9 @@ export class IntegrationsService {
     const connection = await this.loadOwnedConnection(connectionId);
     const adapter = getProviderAdapter(connection.provider);
     try {
-      const structure = await adapter.discoverStructure(this.credsFor(connection));
+      const creds = this.credsFor(connection);
+      const discovered = await adapter.discoverStructure(creds);
+      const structure = await this.ensureAtLeastOneTarget(adapter, creds, discovered);
       const updated = await this.tenant.client.integrationConnection.update({
         where: { id: connectionId },
         data: { structureSnapshot: structure.raw as object, status: "active" },

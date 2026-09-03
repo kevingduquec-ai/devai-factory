@@ -93,6 +93,14 @@ export interface CreatedIssueRef {
 export interface IntegrationProviderAdapter {
   testConnection(creds: ProviderCredentials): Promise<void>;
   discoverStructure(creds: ProviderCredentials): Promise<DiscoveredStructure>;
+  /**
+   * Cuando la cuenta del cliente no tiene ningún proyecto/lista todavía
+   * (discoverStructure devolvió 0 destinos), crea uno nuevo listo para
+   * recibir historias — nunca toca proyectos/listas existentes, solo
+   * añade uno aislado, así que no hay riesgo de alterar una estructura
+   * que el cliente ya usa para otra cosa.
+   */
+  createDefaultTarget(creds: ProviderCredentials): Promise<DiscoveredTarget>;
   discoverTargetDetail(
     creds: ProviderCredentials,
     targetId: string,
