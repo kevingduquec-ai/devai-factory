@@ -34,9 +34,38 @@ const MAX_ELEMENTS = 25;
  * websockets, polling), así que se usa como mejor esfuerzo y de todos
  * modos se suma una espera fija corta como piso.
  */
+/**
+ * Microsoft (y otros IdP federados) muestran un interstitial "Stay signed
+ * in?" / "¿Mantener la sesión iniciada?" justo después de validar
+ * credenciales correctamente y ANTES de devolver el control a la app real
+ * — caso real que ya pasó: un login con credenciales válidas "fallaba"
+ * porque el navegador se quedaba parado en esta pantalla para siempre,
+ * nunca porque el login hubiera fallado de verdad. Se descarta con "No"
+ * — la opción más segura para pruebas automatizadas, ya que "Yes" deja
+ * una cookie de sesión persistente entre corridas que no queremos. Best
+ * effort en cada sentido: si la pantalla no aparece, no hace nada; si el
+ * intento de descartarla falla por lo que sea, nunca rompe el flujo
+ * principal del caso.
+ */
+async function dismissKnownInterstitials(page: Page): Promise<void> {
+  try {
+    const stayLoggedInPrompt = page.getByText(/stay signed in\?|¿mantener.*sesión|seguir conectado/i).first();
+    const visible = await stayLoggedInPrompt.isVisible({ timeout: 1000 }).catch(() => false);
+    if (!visible) return;
+    const dismissButton = page.getByRole("button", { name: /^no$/i }).first();
+    const hasDismissButton = (await dismissButton.count().catch(() => 0)) > 0;
+    if (!hasDismissButton) return;
+    await dismissButton.click({ timeout: 3000 }).catch(() => {});
+    await page.waitForLoadState("networkidle", { timeout: 6000 }).catch(() => {});
+  } catch {
+    // best-effort — nunca debe romper el flujo principal del caso
+  }
+}
+
 export async function settleAfterNavigation(page: Page): Promise<void> {
   await page.waitForLoadState("networkidle", { timeout: 6000 }).catch(() => {});
   await page.waitForTimeout(1200);
+  await dismissKnownInterstitials(page);
 }
 
 /**

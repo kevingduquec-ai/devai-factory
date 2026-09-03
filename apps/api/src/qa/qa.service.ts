@@ -126,6 +126,50 @@ function fixUnconfirmedUrlAssertion(draft: QaTestCaseDraft): QaTestCaseDraft {
   return { ...draft, steps: newSteps };
 }
 
+const EMPTY_OR_INVALID_EMAIL_TITLE_PATTERN = /(correo|email|usuario)[^.]*(vac[íi]|inv[áa]lid)|(vac[íi]|inv[áa]lid)[^.]*(correo|email|usuario)/i;
+
+/**
+ * Red de seguridad mecánica para el mismo patrón de la regla 10: un caso
+ * que prueba "correo vacío/inválido no permite avanzar" incluye de todos
+ * modos un fill sobre el campo de contraseña — que en un login de varios
+ * pasos (regla 6b) no puede existir todavía si el correo nunca fue válido,
+ * así que ese fill siempre revienta con un timeout que no prueba nada real
+ * de la aplicación. Caso real que ya pasó: un caso de "correo vacío"
+ * llenaba la contraseña sin haber llenado el correo, y otro de "formato de
+ * correo inválido" llenaba un correo malformado y LUEGO la contraseña —
+ * ambos fallan por diseño del caso, no por un bug del sitio. Se detecta
+ * por tres señales independientes (cualquiera basta): el título del caso
+ * ya delata que el correo es el campo bajo prueba (vacío o inválido); no
+ * hay ningún fill de correo antes del fill de contraseña (se intenta
+ * llenar una contraseña sin haber tocado el correo primero); o el valor
+ * literal usado para el correo no tiene forma de correo real (sin "@") y
+ * no viene de un dataRef (cuenta real pedida al cliente). En cualquiera
+ * de los tres casos se elimina el fill de contraseña — el resto del caso
+ * (el click de envío y la aserción final, que ya suelen verificar
+ * correctamente que el campo de correo sigue visible) queda intacto.
+ */
+function fixPrematurePasswordFill(draft: QaTestCaseDraft): QaTestCaseDraft {
+  const passwordFillIndex = draft.steps.findIndex(
+    (s) => s.action === "fill" && /password|contrase/i.test(s.selector ?? ""),
+  );
+  if (passwordFillIndex === -1) return draft;
+
+  const precedingEmailFill = draft.steps
+    .slice(0, passwordFillIndex)
+    .reverse()
+    .find((s) => s.action === "fill" && !/password|contrase/i.test(s.selector ?? ""));
+
+  const titleSignalsInvalidEmail = EMPTY_OR_INVALID_EMAIL_TITLE_PATTERN.test(draft.title);
+  const noEmailFillBeforePassword = !precedingEmailFill;
+  const emailValueLooksMalformed =
+    !!precedingEmailFill && !precedingEmailFill.dataRef && !(precedingEmailFill.value ?? "").includes("@");
+
+  if (!titleSignalsInvalidEmail && !noEmailFillBeforePassword && !emailValueLooksMalformed) return draft;
+
+  const steps = draft.steps.filter((_, i) => i !== passwordFillIndex);
+  return { ...draft, steps };
+}
+
 /**
  * Red de seguridad mecánica para otro patrón que ya causó un fallo real:
  * un caso usa un dataRef (ej. "login_email") en sus steps pero no lo
@@ -391,7 +435,10 @@ export class QaService {
     const created: QaTestCase[] = [];
     const knownTexts = collectKnownTexts(module.discoveredStructure);
     const groundedDrafts = fixOrphanedDataRefs(
-      result.data.testCases.map((draft) => groundOrAskInstead(draft, knownTexts)).map(fixUnconfirmedUrlAssertion),
+      result.data.testCases
+        .map((draft) => groundOrAskInstead(draft, knownTexts))
+        .map(fixUnconfirmedUrlAssertion)
+        .map(fixPrematurePasswordFill),
     );
 
     await this.tenant.client.$transaction(async (tx) => {

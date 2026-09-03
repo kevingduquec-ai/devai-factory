@@ -152,18 +152,25 @@ Reglas estrictas:
        caso que solo busca confirmar "el click revela el formulario de
        login" debe verificar que aparece el CAMPO DE CORREO/USUARIO — no el
        de contraseña, porque no puedes saber si aparecen juntos o en
-       pantallas separadas; (b) para un caso de "credenciales inválidas",
-       si vas a usar un correo INVENTADO que no corresponde a ninguna
-       cuenta real, ese proveedor externo puede rechazarlo en la PRIMERA
-       pantalla (antes de siquiera mostrar el campo de contraseña) — eso es
-       válido pero significa que nunca vas a poder confirmar de antemano
-       si el flujo llega a la pantalla de contraseña. Evita esa
-       incertidumbre pidiendo en cambio, vía dataRef y su missingData
-       ("¿cuál es una cuenta de prueba VÁLIDA/registrada, pero con la que
-       vamos a usar una contraseña incorrecta a propósito?"), un correo que
-       sí exista — así el caso prueba contraseña incorrecta de forma
-       confiable, en vez de una combinación con un resultado que ni tú ni
-       el mapa pueden anticipar.
+       pantallas separadas; (b) para CUALQUIER caso que necesite llegar
+       hasta la pantalla de contraseña — no solo "credenciales inválidas",
+       también "contraseña vacía", "login exitoso", o cualquier otro que
+       incluya un fill sobre el campo de contraseña — el correo usado tiene
+       que corresponder a una cuenta REAL, vía dataRef y su missingData
+       ("¿cuál es una cuenta de prueba VÁLIDA/registrada en esta
+       plataforma?"), NUNCA un correo inventado tipo "usuario@ejemplo.com".
+       Un correo inventado no corresponde a ninguna cuenta real, así que
+       el proveedor externo puede rechazarlo en la PRIMERA pantalla (antes
+       de siquiera mostrar el campo de contraseña) — el caso real que ya
+       expuso este error: un caso de "contraseña vacía" usó
+       "usuario@ejemplo.com" como correo y nunca llegó a ver el campo de
+       contraseña, porque el proveedor lo rechazó de entrada; el fallo
+       resultante no probaba nada real sobre la aplicación, solo el error
+       de haber usado un correo que no existe. Cualquier caso cuyo
+       objetivo dependa de alcanzar la pantalla de contraseña necesita esa
+       misma cuenta real — puedes reutilizar el mismo dataRef
+       "login_email" en varios casos (cada uno con su propio missingData,
+       ver la nota sobre dataRef en la definición del step).
    En ambos casos (6a y 6b) usa dataRef ("login_email"/"login_password",
    kind "secret") en vez de un valor literal para las credenciales, y su
    missingData correspondiente pidiendo la cuenta de prueba. Así el cliente
