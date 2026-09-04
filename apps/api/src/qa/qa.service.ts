@@ -559,12 +559,43 @@ export class QaService {
     // (una sola vez por módulo). Nunca debe romper el guardado del dato en
     // sí si la investigación falla por lo que sea.
     if (request.kind === "secret" && (request.fieldKey === "login_email" || request.fieldKey === "login_password")) {
+      // Editar un correo/contraseña ya resuelto (no la primera respuesta,
+      // una corrección) con una investigación previa ya guardada NO
+      // disparaba nada — runLoginInvestigationIfReady es idempotente a
+      // propósito para no relanzar el navegador en cada resolve, pero eso
+      // significaba que corregir un dato mal escrito dejaba todos los
+      // selectores y textos confirmados desactualizados con el valor
+      // viejo, exactamente lo contrario de lo que se le pidió al pedirle
+      // la corrección. Si el valor realmente cambió, se invalida la
+      // investigación guardada para que corra de nuevo con el dato nuevo.
+      const oldValue = request.encryptedValue ? decryptSecret(request.encryptedValue) : null;
+      if (oldValue !== null && oldValue !== dto.value) {
+        await this.invalidateLoginInvestigation(request.testCase.moduleId);
+      }
       await this.runLoginInvestigationIfReady(request.testCase.moduleId).catch((e) => {
         this.logger.warn(`Investigación de login falló para el módulo ${request.testCase.moduleId}: ${e instanceof Error ? e.message : String(e)}`);
       });
     }
 
     return this.sanitizeMissingData(updated);
+  }
+
+  /**
+   * Borra el confirmedLoginFlow guardado de un módulo (si tiene) sin tocar
+   * el resto de discoveredStructure — el paso previo a dejar que
+   * runLoginInvestigationIfReady corra de nuevo tras corregir un
+   * correo/contraseña que ya se había investigado con el valor viejo.
+   */
+  private async invalidateLoginInvestigation(moduleId: string): Promise<void> {
+    const module = await this.tenant.client.qaTestModule.findUnique({ where: { id: moduleId } });
+    if (!module) return;
+    const existingStructure = (module.discoveredStructure ?? {}) as { confirmedLoginFlow?: unknown };
+    if (!existingStructure.confirmedLoginFlow) return;
+    const { confirmedLoginFlow: _discard, ...rest } = existingStructure;
+    await this.tenant.client.qaTestModule.update({
+      where: { id: moduleId },
+      data: { discoveredStructure: rest as unknown as object },
+    });
   }
 
   /**
