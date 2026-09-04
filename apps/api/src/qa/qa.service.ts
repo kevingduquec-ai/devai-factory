@@ -700,7 +700,12 @@ export class QaService {
         if (/url/i.test(md.fieldKey) && confirmed.happyPath?.finalUrl) {
           candidate = confirmed.happyPath.finalUrl;
         } else if (/exito|éxito|success|bienvenid|welcome/i.test(md.fieldKey) && confirmed.happyPath?.headings[0]) {
-          candidate = confirmed.happyPath.headings[0];
+          // Otro caso real ya expuesto: un saludo que cambia según la hora
+          // del día ("Buenas tardes, X" vs "Buenas noches, X") hace que un
+          // assert_text con el saludo completo falle apenas cambia el
+          // momento del día en que se investigó — se recorta ese prefijo
+          // variable y se usa la parte estable (el nombre) como criterio.
+          candidate = confirmed.happyPath.headings[0].replace(/^(buenos?\s+d[íi]as|buenas?\s+tardes|buenas?\s+noches),?\s*/i, "");
         } else if (/invalid|error|credencial/i.test(md.fieldKey) && confirmed.wrongPassword?.headings[0]) {
           candidate = confirmed.wrongPassword.headings[0];
         }
