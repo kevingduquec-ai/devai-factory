@@ -275,6 +275,18 @@ interface DiscoveredPage {
   textSnippets: string[];
 }
 
+/** Forma mínima que este módulo necesita de LoginInvestigationResult (playwright-discovery.ts) — se declara localmente en vez de importarla para no acoplar la capa de orquestación a la de ejecución de QA. */
+interface ConfirmedLoginFlow {
+  loginClickSelector: string | null;
+  isTwoStep: boolean;
+  emailSelector: string;
+  nextSelector: string | null;
+  passwordSelector: string;
+  submitSelector: string;
+  happyPath: { finalUrl: string; headings: string[]; textSnippets: string[] } | null;
+  wrongPassword: { finalUrl: string; headings: string[]; textSnippets: string[]; stayedOnPasswordScreen: boolean } | null;
+}
+
 /**
  * En Modo A (exploración completa) el mismo header/nav (logo, "Categorías",
  * "Hola, inicia sesión"...) aparece repetido en cada una de las páginas
@@ -351,12 +363,35 @@ export async function runQaTestCasesStage(
       ? `\n\nEste módulo YA tiene estos casos generados en una corrida anterior — NO los repitas ni generes una variante casi idéntica de ninguno (mismo título, mismo escenario con severidad o nombre distinto, o el mismo dato pedido con otra redacción). Genera SOLO casos que cubran un escenario genuinamente distinto de todos estos:\n${params.existingCaseTitles.map((t) => `- ${t}`).join("\n")}\nSi el mapa no da para casos realmente nuevos más allá de estos, devuelve una lista vacía en vez de duplicar.`
       : "";
 
+  const confirmedLoginFlow = (params.discoveredStructure as { confirmedLoginFlow?: ConfirmedLoginFlow } | undefined)
+    ?.confirmedLoginFlow;
+  const confirmedLoginBlock = confirmedLoginFlow
+    ? `\n\nIMPORTANTE — el login de este módulo YA fue investigado en vivo con las credenciales reales del cliente (no es una suposición, es lo que de verdad pasó al probarlo): ${
+        confirmedLoginFlow.isTwoStep
+          ? `es un login en DOS pantallas separadas (correo primero, contraseña después de un click intermedio).`
+          : `es un login de UNA sola pantalla (correo y contraseña juntos).`
+      } Usa EXACTAMENTE estos selectores confirmados, sin inventar alternativas ni describirlos como "inferido" — ya no lo son:
+- Click para revelar el formulario: ${confirmedLoginFlow.loginClickSelector ? `"${confirmedLoginFlow.loginClickSelector}"` : "no hizo falta, el formulario ya estaba a la vista"}
+- Campo de correo/usuario: "${confirmedLoginFlow.emailSelector}"
+${confirmedLoginFlow.isTwoStep ? `- Click para avanzar a la pantalla de contraseña: "${confirmedLoginFlow.nextSelector}"\n` : ""}- Campo de contraseña: "${confirmedLoginFlow.passwordSelector}"
+- Botón de envío final (con ambos campos ya llenos): "${confirmedLoginFlow.submitSelector}"
+${confirmedLoginFlow.isTwoStep ? `Para un caso que deja el correo vacío: el click de envío en ESA pantalla es el mismo botón de avanzar ("${confirmedLoginFlow.nextSelector}"), NUNCA el botón de envío final — ese pertenece a la segunda pantalla, a la que un correo vacío nunca llega.\n` : ""}${
+        confirmedLoginFlow.happyPath
+          ? `Resultado real observado con credenciales correctas: URL final "${confirmedLoginFlow.happyPath.finalUrl}", encabezados visibles [${confirmedLoginFlow.happyPath.headings.map((h) => `"${h}"`).join(", ")}]. Usa este encabezado tal cual (o el fragmento de URL) como criterio de éxito del login — es un hecho observado, no necesitas preguntarlo como missingData.\n`
+          : ""
+      }${
+        confirmedLoginFlow.wrongPassword
+          ? `Resultado real observado con contraseña incorrecta (mismo correo real): ${confirmedLoginFlow.wrongPassword.stayedOnPasswordScreen ? "el campo de contraseña sigue visible" : "no permanece en la pantalla de contraseña"}, encabezados visibles [${confirmedLoginFlow.wrongPassword.headings.map((h) => `"${h}"`).join(", ")}]. Usa esto tal cual para el caso de credenciales inválidas — también es un hecho observado.\n`
+          : ""
+      }`
+    : "";
+
   const prompt = `Módulo a probar: "${params.moduleName}"
 URL base de la aplicación: ${params.targetUrl}
 ${params.hasSetupSteps ? "Ya existe una precondición de acceso (login + navegación) que deja al sistema listo en este módulo — no la repitas." : "Este módulo es la primera pantalla (no requiere login ni navegación previa)."}
 
 Descripción de lo que hay que probar:
-"""${params.description}"""${startingPageNote}${structureBlock}${existingCasesBlock}`;
+"""${params.description}"""${startingPageNote}${structureBlock}${existingCasesBlock}${confirmedLoginBlock}`;
 
   return claude.generateStructured({
     system: SYSTEM_PROMPT,

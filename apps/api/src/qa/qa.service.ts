@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from "@nestjs/common";
 import { InjectQueue } from "@nestjs/bullmq";
 import type { Queue } from "bullmq";
 import type { QaMissingDataRequest, QaTestCase } from "@prisma/client";
@@ -11,7 +11,7 @@ import { UpdateSetupStepsDto } from "./dto/update-setup-steps.dto";
 import { ResolveMissingDataDto } from "./dto/resolve-missing-data.dto";
 import { QA_RUN_QUEUE } from "./qa.constants";
 import type { QaRunJobData } from "./qa-run.processor";
-import { autoBuildLoginSetupSteps, runDiscovery } from "./playwright-discovery";
+import { autoBuildLoginSetupSteps, runDiscovery, investigateLoginFlow, type LoginInvestigationResult } from "./playwright-discovery";
 import type { QaStep } from "./qa-step.types";
 
 function padCode(prefix: string, i: number) {
@@ -220,6 +220,8 @@ function runJobId(runId: string) {
 
 @Injectable()
 export class QaService {
+  private readonly logger = new Logger(QaService.name);
+
   constructor(
     private readonly tenant: TenantPrismaService,
     private readonly claude: ClaudeClient,
@@ -353,9 +355,15 @@ export class QaService {
       relevanceText: `${module.name} ${module.description}`,
     });
 
+    // El login investigado en vivo (confirmedLoginFlow, ver
+    // runLoginInvestigationIfReady) no depende de este re-escaneo
+    // estructural — perderlo cada vez que el cliente pide "Detectar de
+    // nuevo" haría que la generación de casos volviera a adivinar sin
+    // motivo.
+    const existingStructure = (module.discoveredStructure ?? {}) as { confirmedLoginFlow?: unknown };
     return this.tenant.client.qaTestModule.update({
       where: { id },
-      data: { discoveredStructure: { pages } as unknown as object },
+      data: { discoveredStructure: { pages, confirmedLoginFlow: existingStructure.confirmedLoginFlow } as unknown as object },
     });
   }
 
@@ -513,7 +521,10 @@ export class QaService {
   async resolveMissingData(requestId: string, dto: ResolveMissingDataDto) {
     const { userId } = this.tenant.currentUser;
     await this.assertQaAutomationEnabled(userId);
-    const request = await this.tenant.client.qaMissingDataRequest.findUnique({ where: { id: requestId } });
+    const request = await this.tenant.client.qaMissingDataRequest.findUnique({
+      where: { id: requestId },
+      include: { testCase: { select: { moduleId: true } } },
+    });
     if (!request) {
       throw new NotFoundException("Solicitud de dato no encontrada");
     }
@@ -539,7 +550,182 @@ export class QaService {
       });
     }
 
+    // Justo cuando el correo/contraseña real del login queda resuelto (en
+    // cualquier caso del módulo, no solo este) es el único momento en que
+    // el sistema puede dejar de adivinar el login y de verdad investigarlo
+    // en vivo — ver investigateLoginFlow(). Se espera aquí (no en segundo
+    // plano) para que el cliente vea los casos ya corregidos apenas
+    // responde, a costa de que este POST puntual tarde más de lo normal
+    // (una sola vez por módulo). Nunca debe romper el guardado del dato en
+    // sí si la investigación falla por lo que sea.
+    if (request.kind === "secret" && (request.fieldKey === "login_email" || request.fieldKey === "login_password")) {
+      await this.runLoginInvestigationIfReady(request.testCase.moduleId).catch((e) => {
+        this.logger.warn(`Investigación de login falló para el módulo ${request.testCase.moduleId}: ${e instanceof Error ? e.message : String(e)}`);
+      });
+    }
+
     return this.sanitizeMissingData(updated);
+  }
+
+  /**
+   * Dispara investigateLoginFlow() apenas el módulo tenga AMBAS
+   * credenciales reales resueltas (en cualquiera de sus casos) y todavía
+   * no se haya investigado — es idempotente: si discoveredStructure ya
+   * trae confirmedLoginFlow, no vuelve a correr. Guarda el resultado en el
+   * módulo y reescribe los casos existentes con refineCasesWithConfirmedLogin().
+   */
+  private async runLoginInvestigationIfReady(moduleId: string): Promise<void> {
+    const module = await this.tenant.client.qaTestModule.findUnique({ where: { id: moduleId } });
+    if (!module) return;
+    const existingStructure = (module.discoveredStructure ?? {}) as { confirmedLoginFlow?: unknown };
+    if (existingStructure.confirmedLoginFlow) return;
+
+    const resolvedSecrets = await this.tenant.client.qaMissingDataRequest.findMany({
+      where: {
+        testCase: { moduleId },
+        kind: "secret",
+        status: "resolved",
+        fieldKey: { in: ["login_email", "login_password"] },
+      },
+    });
+    const emailReq = resolvedSecrets.find((r) => r.fieldKey === "login_email");
+    const passwordReq = resolvedSecrets.find((r) => r.fieldKey === "login_password");
+    if (!emailReq?.encryptedValue || !passwordReq?.encryptedValue) return;
+
+    const email = decryptSecret(emailReq.encryptedValue);
+    const password = decryptSecret(passwordReq.encryptedValue);
+
+    const confirmed = await investigateLoginFlow({ targetUrl: module.targetUrl, email, password });
+    if (!confirmed) return;
+
+    await this.tenant.client.qaTestModule.update({
+      where: { id: moduleId },
+      data: { discoveredStructure: { ...existingStructure, confirmedLoginFlow: confirmed } as unknown as object },
+    });
+
+    await this.refineCasesWithConfirmedLogin(moduleId, confirmed);
+  }
+
+  /**
+   * Reescribe los pasos de TODOS los casos existentes del módulo con los
+   * selectores que investigateLoginFlow() acaba de confirmar en vivo —
+   * reemplaza cada selector "inferido, no confirmado en el mapa" por el
+   * real, e inserta el click de "Siguiente" que un login en dos pasos
+   * necesita si el caso no lo tenía. También resuelve automáticamente
+   * cualquier pregunta de missingData que siga PENDIENTE sobre el texto de
+   * éxito o error del login, usando el texto que la investigación observó
+   * de verdad — así un humano deja de tener que adivinar (o traducir) ese
+   * texto, la causa exacta de un bug real de esta sesión (se pidió el
+   * texto en español y la pantalla real lo mostraba en inglés). Nunca
+   * toca una respuesta que el cliente ya dio — solo completa lo pendiente.
+   */
+  private async refineCasesWithConfirmedLogin(moduleId: string, confirmed: LoginInvestigationResult): Promise<void> {
+    const cases = await this.tenant.client.qaTestCase.findMany({
+      where: { moduleId },
+      include: { missingDataRequests: true },
+    });
+
+    const isEmailFill = (s: QaStep) =>
+      s.action === "fill" && (s.dataRef === "login_email" || (/email|text/i.test(s.selector ?? "") && !/password|contrase/i.test(s.selector ?? "")));
+    const isPasswordFill = (s: QaStep) => s.action === "fill" && (s.dataRef === "login_password" || /password|contrase/i.test(s.selector ?? ""));
+    const isLoginClick = (s: QaStep, i: number) => s.action === "click" && i === 0 && /iniciar sesi[oó]n|log\s?in|sign\s?in|entrar|acceder|ingresar|mi cuenta|my account|acceso/i.test(s.selector ?? "");
+
+    for (const testCase of cases) {
+      const steps = testCase.steps as unknown as QaStep[];
+      const hasPasswordFill = steps.some(isPasswordFill);
+      let changed = false;
+      const newSteps: QaStep[] = [];
+
+      for (const [i, step] of steps.entries()) {
+        if (isLoginClick(step, i) && confirmed.loginClickSelector) {
+          newSteps.push({ ...step, selector: confirmed.loginClickSelector, description: "Hacer click en el botón de acceso (confirmado por investigación real con las credenciales del cliente)." });
+          changed = true;
+          continue;
+        }
+        if (isEmailFill(step)) {
+          newSteps.push({ ...step, selector: confirmed.emailSelector, description: step.description.replace(/\(selector inferido[^)]*\)/i, "(selector confirmado por investigación real)") });
+          changed = true;
+          // El caso original ya puede traer su propio click justo después
+          // (ej. el intento de envío de un caso de "correo vacío") — solo
+          // insertamos el click de avance si ese paso no existe, para no
+          // terminar con dos clicks seguidos sobre el mismo botón.
+          const nextOriginalStep = steps[i + 1];
+          if (confirmed.isTwoStep && confirmed.nextSelector && nextOriginalStep?.action !== "click") {
+            newSteps.push({
+              action: "click",
+              selector: confirmed.nextSelector,
+              value: null,
+              dataRef: null,
+              description: "Hacer click en el botón para avanzar a la pantalla de contraseña (confirmado por investigación real).",
+            });
+          }
+          continue;
+        }
+        if (isPasswordFill(step)) {
+          newSteps.push({ ...step, selector: confirmed.passwordSelector, description: step.description.replace(/\(selector inferido[^)]*\)/i, "(selector confirmado por investigación real)") });
+          changed = true;
+          continue;
+        }
+        // El click de envío genérico: si el caso llena contraseña, es el
+        // submit real de la última pantalla; si no (casos de "correo
+        // vacío", que nunca llegan a la contraseña), es el botón de avanzar
+        // de la PRIMERA pantalla — dos selectores distintos en un login de
+        // dos pasos, y confundirlos fue exactamente el bug que rompía
+        // estos casos antes de tener esta investigación.
+        if (step.action === "click" && /submit|enviar|envío/i.test(`${step.selector ?? ""} ${step.description}`)) {
+          const target = hasPasswordFill ? confirmed.submitSelector : (confirmed.nextSelector ?? confirmed.submitSelector);
+          newSteps.push({ ...step, selector: target, description: step.description.replace(/\(selector inferido[^)]*\)/i, "(selector confirmado por investigación real)") });
+          changed = true;
+          continue;
+        }
+        newSteps.push(step);
+      }
+
+      if (changed) {
+        await this.tenant.client.qaTestCase.update({ where: { id: testCase.id }, data: { steps: newSteps as unknown as object[] } });
+      }
+
+      // Autocompleta preguntas PENDIENTES sobre el resultado del login con
+      // lo que la investigación observó de verdad — nunca sobrescribe una
+      // respuesta que el cliente ya dio. A propósito solo en los casos de
+      // alta confianza: un caso real ya demostró que el textSnippet[0] de
+      // la pantalla de "contraseña incorrecta" puede ser ruido (el propio
+      // correo repetido en pantalla, no el mensaje de error) — un heading
+      // real es mucho más confiable que cualquier textSnippet suelto, así
+      // que si no hay un heading real, se deja la pregunta pendiente para
+      // que la responda el cliente en vez de arriesgar un dato incorrecto.
+      for (const md of testCase.missingDataRequests) {
+        if (md.status !== "pending" || md.kind !== "business") continue;
+        let candidate: string | undefined;
+        if (/url/i.test(md.fieldKey) && confirmed.happyPath?.finalUrl) {
+          candidate = confirmed.happyPath.finalUrl;
+        } else if (/exito|éxito|success|bienvenid|welcome/i.test(md.fieldKey) && confirmed.happyPath?.headings[0]) {
+          candidate = confirmed.happyPath.headings[0];
+        } else if (/invalid|error|credencial/i.test(md.fieldKey) && confirmed.wrongPassword?.headings[0]) {
+          candidate = confirmed.wrongPassword.headings[0];
+        }
+        if (!candidate) continue;
+        await this.tenant.client.qaMissingDataRequest.update({
+          where: { id: md.id },
+          data: {
+            status: "resolved",
+            businessValue: candidate,
+            respondedAt: new Date(),
+            respondedBy: "investigacion-automatica",
+          },
+        });
+      }
+
+      const remainingPending = await this.tenant.client.qaMissingDataRequest.count({
+        where: { testCaseId: testCase.id, status: "pending" },
+      });
+      if (remainingPending === 0) {
+        await this.tenant.client.qaTestCase.updateMany({
+          where: { id: testCase.id, status: "blocked_missing_data" },
+          data: { status: "draft" },
+        });
+      }
+    }
   }
 
   async triggerRun(moduleId: string) {

@@ -2,7 +2,7 @@ import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { chromium, type Page } from "playwright";
 import type { QaStep } from "./qa-step.types";
-import { settleAfterNavigation, NEXT_BUTTON_PATTERN } from "./playwright-discovery";
+import { settleAfterNavigation, NEXT_BUTTON_PATTERN, interactiveTextLocator } from "./playwright-discovery";
 
 export interface StepExecutionResult {
   description: string;
@@ -102,7 +102,7 @@ async function runStep(page: Page, step: QaStep, resolvedData: Map<string, strin
         // existe ese botón, el error original (más claro) es el que se
         // reporta — este mecanismo nunca oculta un fallo real.
         if (!/password/i.test(step.selector)) throw error;
-        const nextButton = page.locator(`text=/${NEXT_BUTTON_PATTERN.source}/i`).first();
+        const nextButton = interactiveTextLocator(page, NEXT_BUTTON_PATTERN).first();
         const found = await nextButton.count().catch(() => 0);
         if (found === 0) throw error;
         await nextButton.click({ timeout: DEFAULT_TIMEOUT_MS }).catch(() => {

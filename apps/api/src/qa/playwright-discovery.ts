@@ -228,6 +228,22 @@ const LOGIN_LINK_PATTERN = /iniciar sesi[oó]n|log\s?in|sign\s?in|^entrar$|acced
 export const NEXT_BUTTON_PATTERN = /^siguiente$|^continuar$|^next$|^continue$|^avanzar$/i;
 
 /**
+ * Un locator "text=/regex/" busca coincidencias en TODO el DOM, incluida
+ * prosa no interactiva — caso real que ya pasó: para un patrón que incluye
+ * "acceder" (parte de LOGIN_LINK_PATTERN), .first() resolvió a
+ * `<p>Ingresa tus datos para acceder a tu Oficina Virtual</p>` en vez del
+ * botón real "Iniciar Sesión" — el click "funcionaba" (no lanzaba error)
+ * pero no hacía nada, porque un párrafo no tiene ningún manejador de
+ * click. Este helper acota la búsqueda a controles REALMENTE clickeables
+ * (button, a, [role=button], input de tipo submit/button) — la forma
+ * correcta en Playwright de decir "el control con este texto", nunca
+ * "cualquier nodo con este texto".
+ */
+export function interactiveTextLocator(page: Page, pattern: RegExp) {
+  return page.locator('button, a, [role="button"], input[type="submit"], input[type="button"]').filter({ hasText: pattern });
+}
+
+/**
  * Muchos logins reales (Google, Microsoft, Okta y clones) piden el correo
  * en una primera pantalla, y solo después de un "Siguiente" muestran el
  * campo de contraseña — detectLoginForm() nunca los reconoce porque exige
@@ -307,11 +323,10 @@ export async function autoBuildLoginSetupSteps(params: { targetUrl: string; emai
 
     let form = await detectLoginForm(page);
     if (!form) {
-      // Usa el mismo motor de selector ("text=") que usa el ejecutor real de
-      // casos (playwright-runner.ts) — getByText() con un RegExp a veces
-      // resuelve a un nodo distinto (un contenedor no interactivo en vez
-      // del botón real).
-      const loginControl = page.locator(`text=/${LOGIN_LINK_PATTERN.source}/i`).first();
+      // interactiveTextLocator (no un text=/regex/ crudo) — ver su
+      // docstring: evita clickear un párrafo de prosa que solo contiene
+      // una palabra del patrón, en vez del botón real.
+      const loginControl = interactiveTextLocator(page, LOGIN_LINK_PATTERN).first();
       const found = await loginControl.count().catch(() => 0);
       if (found > 0) {
         // En apps con un framework pesado (Angular/React) el botón puede
@@ -369,6 +384,213 @@ export async function autoBuildLoginSetupSteps(params: { targetUrl: string; emai
         ];
 
     return { steps, structure };
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
+export interface LoginInvestigationResult {
+  investigatedAt: string;
+  /** Selector real del botón/link que reveló el formulario, o null si el formulario ya estaba a la vista sin necesidad de click. */
+  loginClickSelector: string | null;
+  /** true si el correo y la contraseña viven en pantallas separadas (Microsoft, Google, Okta y clones) — confirmado en vivo, no inferido. */
+  isTwoStep: boolean;
+  emailSelector: string;
+  /** Selector del botón "Siguiente" — solo si isTwoStep. */
+  nextSelector: string | null;
+  passwordSelector: string;
+  submitSelector: string;
+  /** Resultado real de loguearse con las credenciales correctas. */
+  happyPath: { finalUrl: string; headings: string[]; textSnippets: string[] } | null;
+  /** Resultado real de intentar con la contraseña incorrecta (mismo correo real). */
+  wrongPassword: { finalUrl: string; headings: string[]; textSnippets: string[]; stayedOnPasswordScreen: boolean } | null;
+  /** Resultado real de enviar el formulario sin completar el correo. */
+  emptyEmail: { finalUrl: string; stillOnLoginScreen: boolean } | null;
+}
+
+/**
+ * Investigación real del flujo de login con credenciales reales — el
+ * equivalente a que un QA humano se siente a probar el login él mismo
+ * ANTES de escribir casos, en vez de que el generador de casos adivine
+ * selectores y textos y los marque "inferido, no confirmado en el mapa".
+ * Se dispara una sola vez por módulo, apenas el cliente responde las
+ * preguntas de correo/contraseña (ver qa.service.ts) — recorre en vivo el
+ * login exitoso, la contraseña incorrecta y el correo vacío, y devuelve
+ * selectores y textos 100% observados. Es la causa de fondo de varios
+ * bugs reales que ya pasaron en producción: un login en dos pasos que el
+ * generador no reconoció, un botón "Siguiente" que no era
+ * button[type=submit], y un mensaje de error que se esperaba en español
+ * cuando la pantalla real lo muestra en inglés — los tres eran
+ * suposiciones que esta investigación reemplaza por hechos.
+ *
+ * Devuelve null si no logra reconocer ningún formulario de login real —
+ * en ese caso el sistema sigue dependiendo de la inferencia, exactamente
+ * como antes de tener esta función.
+ */
+export async function investigateLoginFlow(params: {
+  targetUrl: string;
+  email: string;
+  password: string;
+}): Promise<LoginInvestigationResult | null> {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+
+    /** Llega hasta la pantalla de login desde targetUrl, dando click en el link de acceso si hace falta. Devuelve el selector usado para el click, o null si el form ya estaba a la vista. */
+    async function reachLoginScreen(page: Page): Promise<string | null> {
+      await page.goto(params.targetUrl, { timeout: DEFAULT_TIMEOUT_MS });
+      await settleAfterNavigation(page);
+      if (await detectLoginForm(page)) return null;
+      if (await detectEmailOnlyStep(page)) return null;
+      const loginControl = interactiveTextLocator(page, LOGIN_LINK_PATTERN).first();
+      const found = await loginControl.count().catch(() => 0);
+      if (found === 0) return null;
+      // Selector final = el texto EXACTO y literal del control real que se
+      // encontró (no el patrón amplio que lo buscó) — un texto literal es
+      // mucho más específico que el patrón OR usado para llegar hasta acá,
+      // y es la misma forma ("text=Iniciar Sesión") que ya se probó
+      // confiable en las corridas reales de casos de este módulo.
+      const controlText = (await loginControl.textContent().catch(() => null))?.trim();
+      const selectorUsed = controlText ? `text=${controlText}` : `text=/${LOGIN_LINK_PATTERN.source}/i`;
+      const urlBeforeClick = page.url();
+      for (let attempt = 0; attempt < 3 && page.url() === urlBeforeClick; attempt++) {
+        await loginControl.click({ timeout: DEFAULT_TIMEOUT_MS }).catch(() => {});
+        await settleAfterNavigation(page);
+      }
+      return selectorUsed;
+    }
+
+    // --- Pasada 1: camino feliz, credenciales correctas — establece los selectores confirmados que las pasadas 2 y 3 reutilizan ---
+    const page1 = await context.newPage();
+    page1.setDefaultTimeout(DEFAULT_TIMEOUT_MS);
+    const loginClickSelector = await reachLoginScreen(page1);
+
+    let form = await detectLoginForm(page1);
+    let emailStep: { emailSelector: string; nextSelector: string } | null = null;
+    if (!form) {
+      emailStep = await detectEmailOnlyStep(page1);
+      if (!emailStep) {
+        await page1.close();
+        return null;
+      }
+      await page1
+        .locator(emailStep.emailSelector)
+        .first()
+        .fill(params.email, { timeout: DEFAULT_TIMEOUT_MS })
+        .catch(() => {});
+      const urlBeforeNext = page1.url();
+      for (let attempt = 0; attempt < 3 && page1.url() === urlBeforeNext; attempt++) {
+        await page1
+          .locator(emailStep.nextSelector)
+          .first()
+          .click({ timeout: DEFAULT_TIMEOUT_MS })
+          .catch(() => {});
+        await settleAfterNavigation(page1);
+      }
+      form = await detectLoginForm(page1);
+      if (!form) {
+        await page1.close();
+        return null;
+      }
+    }
+    await page1
+      .locator(form.passwordSelector)
+      .first()
+      .fill(params.password, { timeout: DEFAULT_TIMEOUT_MS })
+      .catch(() => {});
+    await page1
+      .locator(form.submitSelector)
+      .first()
+      .click({ timeout: DEFAULT_TIMEOUT_MS })
+      .catch(() => {});
+    await settleAfterNavigation(page1);
+    const happyStructure = await discoverPageStructure(page1);
+    const happyPath = { finalUrl: page1.url(), headings: happyStructure.headings, textSnippets: happyStructure.textSnippets };
+    await page1.close();
+
+    const isTwoStep = Boolean(emailStep);
+    const emailSelector = emailStep?.emailSelector ?? form.emailSelector;
+    const nextSelector = emailStep?.nextSelector ?? null;
+    const passwordSelector = form.passwordSelector;
+    const submitSelector = form.submitSelector;
+
+    // --- Pasada 2: contraseña incorrecta, mismo correo real — usa los selectores ya confirmados en la pasada 1 ---
+    let wrongPassword: LoginInvestigationResult["wrongPassword"] = null;
+    try {
+      const page2 = await context.newPage();
+      page2.setDefaultTimeout(DEFAULT_TIMEOUT_MS);
+      await reachLoginScreen(page2);
+      await page2.locator(emailSelector).first().fill(params.email, { timeout: DEFAULT_TIMEOUT_MS });
+      if (nextSelector) {
+        await page2
+          .locator(nextSelector)
+          .first()
+          .click({ timeout: DEFAULT_TIMEOUT_MS })
+          .catch(() => {});
+        await settleAfterNavigation(page2);
+      }
+      const stillHasPasswordField = (await page2.locator(passwordSelector).first().count().catch(() => 0)) > 0;
+      if (stillHasPasswordField) {
+        await page2.locator(passwordSelector).first().fill(`${params.password}_qa_invalida`, { timeout: DEFAULT_TIMEOUT_MS });
+        await page2
+          .locator(submitSelector)
+          .first()
+          .click({ timeout: DEFAULT_TIMEOUT_MS })
+          .catch(() => {});
+        await settleAfterNavigation(page2);
+      }
+      const wrongStructure = await discoverPageStructure(page2);
+      wrongPassword = {
+        finalUrl: page2.url(),
+        headings: wrongStructure.headings,
+        textSnippets: wrongStructure.textSnippets,
+        stayedOnPasswordScreen: await page2
+          .locator(passwordSelector)
+          .first()
+          .isVisible()
+          .catch(() => false),
+      };
+      await page2.close();
+    } catch {
+      wrongPassword = null;
+    }
+
+    // --- Pasada 3: correo vacío ---
+    let emptyEmail: LoginInvestigationResult["emptyEmail"] = null;
+    try {
+      const page3 = await context.newPage();
+      page3.setDefaultTimeout(DEFAULT_TIMEOUT_MS);
+      await reachLoginScreen(page3);
+      const submitOnFirstScreen = nextSelector ?? submitSelector;
+      await page3
+        .locator(submitOnFirstScreen)
+        .first()
+        .click({ timeout: DEFAULT_TIMEOUT_MS })
+        .catch(() => {});
+      await settleAfterNavigation(page3);
+      const stillOnLoginScreen = await page3
+        .locator(emailSelector)
+        .first()
+        .isVisible()
+        .catch(() => false);
+      emptyEmail = { finalUrl: page3.url(), stillOnLoginScreen };
+      await page3.close();
+    } catch {
+      emptyEmail = null;
+    }
+
+    return {
+      investigatedAt: new Date().toISOString(),
+      loginClickSelector,
+      isTwoStep,
+      emailSelector,
+      nextSelector,
+      passwordSelector,
+      submitSelector,
+      happyPath,
+      wrongPassword,
+      emptyEmail,
+    };
   } finally {
     await browser.close().catch(() => {});
   }
