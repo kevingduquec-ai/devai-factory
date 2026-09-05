@@ -12,6 +12,16 @@
 -- application tables — so RLS actually applies to it. Point the app's
 -- DATABASE_APP_URL at this role; keep DATABASE_URL (the owner) for `prisma
 -- migrate` only. See PrismaService, which connects with DATABASE_APP_URL.
+--
+-- The database name and owner-role name below are NEVER hardcoded to the
+-- local Docker setup ('devai_factory' / 'devai') — a managed Postgres (ej.
+-- el que da Railway) usa nombres distintos, y GRANT CONNECT ON DATABASE
+-- <nombre literal que no existe> revienta con un error duro que aborta el
+-- resto del deploy. current_database() y current_user (el rol que
+-- literalmente está corriendo `prisma migrate deploy`, siempre el dueño
+-- real de las tablas que se acaban de crear) resuelven al valor correcto
+-- sin importar el entorno — por eso van dentro de EXECUTE format(), la
+-- única forma de usarlos como identificador dinámico en un GRANT/ALTER.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'devai_app') THEN
@@ -20,14 +30,14 @@ BEGIN
 END
 $$;
 
-GRANT CONNECT ON DATABASE devai_factory TO devai_app;
+DO $$
+BEGIN
+  EXECUTE format('GRANT CONNECT ON DATABASE %I TO devai_app', current_database());
+  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO devai_app', current_user);
+  EXECUTE format('ALTER DEFAULT PRIVILEGES FOR ROLE %I IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO devai_app', current_user);
+END
+$$;
+
 GRANT USAGE ON SCHEMA public TO devai_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO devai_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO devai_app;
-
--- So future migrations (new tables/sequences) stay accessible to devai_app
--- without a manual GRANT each time.
-ALTER DEFAULT PRIVILEGES FOR ROLE devai IN SCHEMA public
-  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO devai_app;
-ALTER DEFAULT PRIVILEGES FOR ROLE devai IN SCHEMA public
-  GRANT USAGE, SELECT ON SEQUENCES TO devai_app;
