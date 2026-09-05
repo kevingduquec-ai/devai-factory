@@ -5,6 +5,7 @@
   "engines": {
     "node": ">=20"
   },
+  "packageManager": "pnpm@11.25.0",
   "scripts": {
     "dev:api": "pnpm --filter @devai-factory/api dev",
     "dev:web": "pnpm --filter @devai-factory/web dev",
